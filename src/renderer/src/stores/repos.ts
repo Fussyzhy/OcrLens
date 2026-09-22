@@ -25,6 +25,10 @@ export interface SessionMatch {
  * startup would spawn one CLI process per repo for no visible benefit. Searching
  * by title is the one operation that legitimately needs all of them, so it loads
  * the rest on demand.
+ *
+ * `loadRecent` is the one other exception, and it is deliberately not wired into
+ * this cache: the home page wants a handful of newest sessions per repository,
+ * which is a capped read that must never be mistaken for the full list.
  */
 export const useRepoStore = defineStore('repos', () => {
   const env = useEnvStore()
@@ -110,6 +114,9 @@ export const useRepoStore = defineStore('repos', () => {
   async function load(): Promise<void> {
     loading.value = true
     error.value = null
+    // The repository set may have changed; the home page's sweep included the
+    // old one, so it has to be allowed to run again.
+    recentLoaded = false
     try {
       repos.value = await unwrap(window.ocr.listRepos())
     } catch (err) {
@@ -197,6 +204,63 @@ export const useRepoStore = defineStore('repos', () => {
         searchLoads = 0
         searchLoading.value = false
       }
+    }
+  }
+
+  /* ---------------- recent activity (home page) ---------------- */
+
+  /** Newest sessions across all repositories, for the landing page. */
+  const recent = ref<SessionMatch[]>([])
+  const recentLoading = ref(false)
+  /** Set once a sweep has finished, so returning home does not respawn the CLI. */
+  let recentLoaded = false
+
+  /**
+   * Reads the newest sessions from every repository, for the home page.
+   *
+   * This is the one place that lists sessions for repositories the user has not
+   * opened, and it exists because an empty first screen is a worse outcome than
+   * the handful of short-lived CLI processes it costs. Two deliberate limits:
+   *
+   * - it does **not** write into `sessions`. Those lists are unlimited; this one
+   *   is capped per repository, and caching a capped list under the same key
+   *   would silently truncate a later expand.
+   * - it never queues titles, so opening the home page can never spend a model
+   *   call — the whole point of the title queue is that only a deliberate look
+   *   at a repository's history feeds it.
+   */
+  async function loadRecent(perRepo = 4, maxRepos = 8): Promise<void> {
+    if (recentLoaded || recentLoading.value) return
+    if (!repos.value.length) return
+
+    recentLoading.value = true
+    const queue = repos.value.filter((repo) => repo.dir && repo.exists).slice(0, maxRepos)
+    const found: SessionMatch[] = []
+
+    try {
+      const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+        for (;;) {
+          const repo = queue.shift()
+          if (!repo?.dir) return
+          try {
+            const list = await unwrap(window.ocr.listSessions(repo.dir, perRepo))
+            for (const session of list) found.push({ repo, session })
+          } catch {
+            // A repository that cannot be listed any more (no sessions, path
+            // gone) contributes nothing rather than failing the whole page.
+          }
+        }
+      })
+      await Promise.all(workers)
+
+      found.sort(
+        (a, b) =>
+          new Date(b.session.start_time).getTime() - new Date(a.session.start_time).getTime()
+      )
+      recent.value = found.slice(0, 6)
+      recentLoaded = true
+    } finally {
+      recentLoading.value = false
     }
   }
 
@@ -517,6 +581,8 @@ export const useRepoStore = defineStore('repos', () => {
     searchLoading,
     visibleRepos,
     searchMatches,
+    recent,
+    recentLoading,
     repoKey,
     sessionLabel,
     sessionHaystack,
@@ -525,6 +591,7 @@ export const useRepoStore = defineStore('repos', () => {
     loadSessions,
     toggleExpand,
     ensureAllSessionsLoaded,
+    loadRecent,
     isBusy,
     openRepo,
     openSession,

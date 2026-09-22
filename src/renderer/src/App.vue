@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import BackgroundFX from './components/BackgroundFX.vue'
 import Sidebar from './components/Sidebar.vue'
 import TitleBar from './components/TitleBar.vue'
 import ToastHost from './components/ToastHost.vue'
@@ -24,6 +25,7 @@ onMounted(async () => {
 
 <template>
   <div class="app">
+    <BackgroundFX />
     <TitleBar />
 
     <div class="shell">

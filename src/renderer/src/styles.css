@@ -49,6 +49,16 @@
    * its divider line continue up through the window chrome. */
   --sidebar-width: 288px;
 
+  /* One rhythm for the right pane: the sticky header and the scrolling body
+   * derive their horizontal padding from these two, which is what keeps their
+   * left edges aligned whether the content is filling the pane or capped and
+   * centred on a very wide window. */
+  --gutter: clamp(18px, 1.6vw, 36px);
+  --content-max: 1760px;
+
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+
   --radius: 8px;
   --radius-lg: 12px;
 
@@ -109,6 +119,151 @@ textarea {
 }
 
 /* ------------------------------------------------------------------ *
+ * Ambient background
+ *
+ * Purely decorative depth behind the whole shell. Every layer is tuned to
+ * stay well under the text: the brightest pixel here is a few percent white,
+ * so contrast ratios are unchanged from the flat black this replaced.
+ *
+ * Fixed behind everything rather than painted into `.pane`, so the glow also
+ * reads through the sidebar and title bar — one continuous space instead of a
+ * black panel sitting on a pattern, and it does not restart on navigation.
+ * ------------------------------------------------------------------ */
+
+.bg-fx {
+  position: fixed;
+  inset: 0;
+  /* Negative, and deliberately not accompanied by a stacking context on the
+   * shell: a negative-z child of the root paints above the canvas background
+   * and below every in-flow box, so the ambient layer shows through the
+   * translucent chrome while every existing overlay keeps its own stacking
+   * order. Raising `.shell` instead would have trapped the delete dialog
+   * (z-index 200, but inside the shell) below the title bar. */
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Dot lattice. Masked to fade out towards the bottom so the lower half of a
+ * long results page stays neutral behind the finding cards. */
+.bg-fx__grid {
+  position: absolute;
+  inset: -80px;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.085) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(ellipse 130% 90% at 50% 0%, #000 25%, transparent 76%);
+  mask-image: radial-gradient(ellipse 130% 90% at 50% 0%, #000 25%, transparent 76%);
+  animation: grid-drift 90s linear infinite;
+}
+
+/* 280px is exactly ten tiles, so the loop point is invisible. */
+@keyframes grid-drift {
+  to {
+    background-position: 280px 280px;
+  }
+}
+
+.bg-fx__orb {
+  position: absolute;
+  width: 46vw;
+  height: 46vw;
+  min-width: 420px;
+  min-height: 420px;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.55;
+  will-change: transform;
+}
+
+.bg-fx__orb--a {
+  top: -20vw;
+  left: -10vw;
+  background: radial-gradient(circle, rgba(43, 222, 94, 0.24), transparent 66%);
+  animation: orb-a 46s ease-in-out infinite;
+}
+
+.bg-fx__orb--b {
+  right: -12vw;
+  bottom: -24vw;
+  background: radial-gradient(circle, rgba(43, 222, 94, 0.17), transparent 66%);
+  animation: orb-b 58s ease-in-out infinite;
+}
+
+.bg-fx__orb--c {
+  top: 30%;
+  left: 48%;
+  background: radial-gradient(circle, rgba(90, 169, 230, 0.14), transparent 68%);
+  animation: orb-c 72s ease-in-out infinite;
+}
+
+@keyframes orb-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(6vw, 4vh, 0) scale(1.12);
+  }
+}
+
+@keyframes orb-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.05);
+  }
+  50% {
+    transform: translate3d(-7vw, -5vh, 0) scale(0.94);
+  }
+}
+
+@keyframes orb-c {
+  0%,
+  100% {
+    transform: translate3d(-50%, 0, 0) scale(0.9);
+  }
+  50% {
+    transform: translate3d(-34%, -8vh, 0) scale(1.08);
+  }
+}
+
+/* A single band of light crossing the window every half minute. Long enough
+ * between passes that it is noticed rather than watched. */
+.bg-fx__sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.035) 50%,
+    transparent 60%
+  );
+  animation: sheen 32s ease-in-out infinite;
+}
+
+@keyframes sheen {
+  0%,
+  100% {
+    transform: translateX(-35%);
+    opacity: 0;
+  }
+  40%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(35%);
+  }
+}
+
+/* Pulls the corners down so the moving layers never fight the UI for
+ * attention, and keeps the bottom of a long page solidly black. */
+.bg-fx__vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 105% 80% at 50% 0%, transparent 38%, rgba(0, 0, 0, 0.62) 100%);
+}
+
+/* ------------------------------------------------------------------ *
  * Window chrome
  *
  * The window is frameless (see main/index.ts), so this bar is the entire
@@ -122,7 +277,9 @@ textarea {
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   flex: none;
   height: 36px;
-  background: var(--bg);
+  /* Translucent on purpose: the ambient layer sits behind the whole window,
+   * so the chrome shares the same space instead of masking it. */
+  background: rgba(0, 0, 0, 0.35);
   border-bottom: 1px solid var(--border-soft);
   /* The whole bar drags the window; the buttons below opt back out. */
   -webkit-app-region: drag;
@@ -130,7 +287,7 @@ textarea {
 }
 
 .titlebar-side {
-  background: var(--bg-side);
+  background: rgba(10, 10, 10, 0.72);
   border-right: 1px solid var(--border);
 }
 
@@ -193,7 +350,7 @@ textarea {
   min-width: 0;
   height: 100%;
   overflow-y: auto;
-  background: var(--bg);
+  background: transparent;
 }
 
 /* ------------------------------------------------------------------ *
@@ -204,7 +361,10 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-side);
+  /* Translucent rather than opaque so the ambient layer reads through as one
+   * continuous space; dark enough that the rail still separates cleanly from
+   * the pane beside it. */
+  background: rgba(10, 10, 10, 0.76);
   border-right: 1px solid var(--border);
 }
 
@@ -230,13 +390,6 @@ textarea {
   width: 26px;
   height: 26px;
   flex: none;
-}
-
-/* Welcome-page hero mark. Drawn at 64px from the 256px asset so it stays sharp
- * on HiDPI displays. */
-.welcome-mark {
-  display: block;
-  margin-bottom: 14px;
 }
 
 .brand-version {
@@ -316,21 +469,22 @@ textarea {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 8px 12px;
+  padding: 9px 8px 12px;
 }
 
 .repo {
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
 .repo-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: 7px;
+  padding: 7px 9px;
   border-radius: var(--radius);
   cursor: pointer;
   user-select: none;
+  transition: background 0.15s ease;
 }
 
 .repo-row:hover {
@@ -341,21 +495,38 @@ textarea {
   background: var(--bg-active);
 }
 
+/* The expander is drawn from two borders rather than a ▶ glyph, which at this
+ * size rendered as a heavy filled triangle that out-weighed every label next
+ * to it. A 1.5px stroke stays legible and reads as chrome, not as content. */
 .chevron {
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border: none;
   background: none;
   color: var(--text-faint);
   cursor: pointer;
-  border-radius: 4px;
-  transition: transform 0.12s ease;
+  border-radius: 5px;
   padding: 0;
+  transition:
+    transform 0.2s var(--ease-out),
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
+.chevron::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+/* Right when collapsed, down when open. */
 .chevron.open {
   transform: rotate(90deg);
 }
@@ -386,19 +557,32 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* A gap between siblings rather than a margin on each row: the session list
+ * holds non-row children too (the empty and error states), and a margin would
+ * have spaced those differently from the rows. */
 .sessions {
-  margin: 1px 0 6px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 3px 0 8px 18px;
   border-left: 1px solid var(--border-soft);
-  padding-left: 6px;
+  padding-left: 7px;
 }
 
 .session-row {
+  position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 7px;
-  padding: 5px 7px;
-  border-radius: 6px;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 7px;
   cursor: pointer;
+  animation: row-in 0.26s var(--ease-out) both;
+  /* Rows cascade in when a repository is expanded instead of appearing as one
+   * block; the delay is clamped so a 200-session history does not queue up
+   * four seconds of animation. */
+  animation-delay: calc(min(var(--row-i, 0), 12) * 18ms);
+  transition: background 0.15s ease;
 }
 
 .session-row:hover {
@@ -407,6 +591,20 @@ textarea {
 
 .session-row.active {
   background: var(--accent-soft);
+}
+
+/* Mark for the open session. Drawn in the row's own gutter rather than by
+ * changing the border, so selecting a row never shifts the text. */
+.session-row.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: bar-in 0.22s var(--ease-out) both;
 }
 
 .status-dot {
@@ -431,6 +629,12 @@ textarea {
   background: var(--sev-high);
 }
 
+/* A session with a title job or a delete in flight: the dot breathes, so the
+ * row still reads as "working" when the spinner is off to the right edge. */
+.session-row.busy .status-dot {
+  animation: dot-pulse 1.3s ease-in-out infinite;
+}
+
 .session-body {
   min-width: 0;
   flex: 1;
@@ -441,6 +645,7 @@ textarea {
   align-items: baseline;
   gap: 6px;
   font-size: 12px;
+  line-height: 1.5;
 }
 
 .session-findings {
@@ -456,6 +661,7 @@ textarea {
 }
 
 .session-sub {
+  margin-top: 2px;
   font-size: 11px;
   color: var(--text-faint);
   overflow: hidden;
@@ -490,8 +696,9 @@ textarea {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   opacity: 0;
+  transition: opacity 0.14s ease;
 }
 
 .session-row:hover .session-actions,
@@ -502,18 +709,21 @@ textarea {
 }
 
 .icon-btn {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   display: grid;
   place-items: center;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
   color: var(--text-faint);
   background: transparent;
   border: none;
   border-radius: 4px;
   cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .icon-btn:hover {
@@ -552,14 +762,16 @@ textarea {
   width: 100%;
   display: flex;
   align-items: flex-start;
-  gap: 7px;
-  padding: 6px 7px;
+  gap: 8px;
+  padding: 7px 8px;
   text-align: left;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
   font: inherit;
+  animation: row-in 0.24s var(--ease-out) both;
+  transition: background 0.15s ease;
 }
 
 .search-hit:hover {
@@ -602,9 +814,30 @@ textarea {
 
 .sidebar-foot {
   border-top: 1px solid var(--border-soft);
-  padding: 8px;
+  padding: 9px 10px;
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 7px;
+}
+
+/* The two utility buttons carry a glyph instead of a label, so they get a
+ * fixed square target of their own. `.btn.sm` sizes itself from its padding,
+ * which left these at roughly a 13px glanceable area — too small to read and
+ * too small to hit comfortably.
+ *
+ * `.btn.foot-icon` rather than `.foot-icon`: `.btn.sm` sets font-size from the
+ * Buttons section further down the file, and with equal specificity it won. */
+.sidebar-foot .btn.foot-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 30px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.sidebar-foot .btn.foot-icon:hover:not(:disabled) {
+  color: var(--text);
 }
 
 /* ------------------------------------------------------------------ *
@@ -622,11 +855,24 @@ textarea {
   border-radius: var(--radius);
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    box-shadow 0.18s ease,
+    transform 0.1s ease;
 }
 
 .btn:hover:not(:disabled) {
   background: var(--bg-hover);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+/* Pressed is a physical, not a painted, state: the button gives slightly
+ * under the pointer. Cheap, and it makes every control in the app feel like
+ * the same object. */
+.btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
 }
 
 .btn:disabled {
@@ -645,6 +891,8 @@ textarea {
 
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-bright);
+  border-color: var(--accent-bright);
+  box-shadow: 0 6px 20px -8px rgba(43, 222, 94, 0.9);
 }
 
 .btn.danger {
@@ -665,7 +913,7 @@ textarea {
 }
 
 .btn.sm {
-  padding: 4px 9px;
+  padding: 5px 10px;
   font-size: 12px;
 }
 
@@ -680,10 +928,15 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 22px;
-  background: rgba(0, 0, 0, 0.92);
-  backdrop-filter: blur(8px);
+  padding-block: 15px;
+  /* The header spans the pane so it can catch content scrolling underneath,
+   * but insets its *content* by whatever the body is inset by — otherwise on a
+   * wide window the title sits far to the left of the cards it belongs to. */
+  padding-inline: max(var(--gutter), calc((100% - var(--content-max)) / 2 + var(--gutter)));
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
+  animation: view-in 0.24s var(--ease-out) both;
 }
 
 .view-head h1 {
@@ -707,35 +960,73 @@ textarea {
   flex-shrink: 0;
 }
 
+/* The content column is fluid up to --content-max instead of stopping at a
+ * fixed 1180px, so maximising the window actually buys horizontal room for the
+ * file table, the mode grid and the finding diffs. Past the cap it centres,
+ * because unbounded line lengths in a maximised window are harder to read, not
+ * easier. */
 .view-body {
-  padding: 20px 22px 48px;
-  max-width: 1180px;
+  padding: clamp(16px, 1.2vw, 24px) var(--gutter) clamp(36px, 3vw, 72px);
+  max-width: var(--content-max);
+  margin-inline: auto;
+  animation: view-in 0.28s var(--ease-out) both;
+}
+
+/* Sections of a view arrive in sequence rather than all at once. Delays are
+ * capped at six so a long page never waits on its own animation. */
+.view-body > * {
+  animation: card-in 0.32s var(--ease-out) both;
+}
+
+.view-body > *:nth-child(1) {
+  animation-delay: 0.03s;
+}
+.view-body > *:nth-child(2) {
+  animation-delay: 0.06s;
+}
+.view-body > *:nth-child(3) {
+  animation-delay: 0.09s;
+}
+.view-body > *:nth-child(4) {
+  animation-delay: 0.12s;
+}
+.view-body > *:nth-child(5) {
+  animation-delay: 0.15s;
+}
+.view-body > *:nth-child(n + 6) {
+  animation-delay: 0.18s;
 }
 
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  transition: border-color 0.2s ease;
+}
+
+.card:hover {
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .card-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 13px 18px;
   border-bottom: 1px solid var(--border-soft);
   font-weight: 600;
   font-size: 13px;
 }
 
 .card-body {
-  padding: 16px;
+  padding: 18px;
 }
 
 .field {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .field:last-child {
@@ -744,7 +1035,7 @@ textarea {
 
 .field-label {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
   color: var(--text-dim);
   font-size: 12px;
 }
@@ -795,7 +1086,7 @@ select {
 
 .row {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: flex-end;
 }
 
@@ -804,30 +1095,38 @@ select {
   min-width: 0;
 }
 
-/* Radio / checkbox cards for the mode picker. */
+/* Radio / checkbox cards for the mode picker. `auto-fit` is what makes this
+ * group use the extra width of a maximised window instead of stretching four
+ * cards across one narrow column. */
 .modes {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
 }
 
 .mode {
   display: block;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elev-2);
   cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    transform 0.16s var(--ease-out),
+    box-shadow 0.2s ease;
 }
 
 .mode:hover {
   background: var(--bg-hover);
+  transform: translateY(-1px);
 }
 
 .mode.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
+  box-shadow: 0 8px 22px -14px rgba(43, 222, 94, 0.85);
 }
 
 .mode input {
@@ -971,23 +1270,24 @@ details.advanced[open] > summary {
 .summary-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 20px;
+  gap: 12px 28px;
   align-items: center;
-  padding: 12px 16px;
+  padding: 16px 20px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  margin-bottom: 16px;
+  margin-bottom: 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
 
 .metric {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
 }
 
 .metric-value {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -999,18 +1299,31 @@ details.advanced[open] > summary {
 
 .sev-toggles {
   display: flex;
-  gap: 6px;
+  gap: 7px;
   flex-wrap: wrap;
 }
 
 .sev-toggle {
-  padding: 2px 9px;
+  padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-elev-2);
   cursor: pointer;
   font-size: 11px;
   color: var(--text-dim);
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease,
+    transform 0.1s ease;
+}
+
+.sev-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.sev-toggle:active {
+  transform: scale(0.96);
 }
 
 .sev-toggle.on {
@@ -1030,28 +1343,70 @@ details.advanced[open] > summary {
   color: var(--sev-low);
 }
 
+/* The filter controls stack on a normal window and split into two columns once
+ * there is room, so the results page uses a maximised window instead of
+ * leaving a long empty strip to the right of the chips. */
+.filter-grid {
+  display: grid;
+  gap: 13px 24px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.filter-row--wide {
+  grid-column: 1 / -1;
+}
+
+.filter-row > input[type='text'] {
+  flex: 1;
+  min-width: 200px;
+}
+
 /* ------------------------------------------------------------------ *
  * Finding cards
  * ------------------------------------------------------------------ */
 
+/* `auto-fit` rather than a media-query switch to a fixed two columns: a fixed
+ * pair looks wrong the moment a session has findings in only one file, because
+ * the right half of a maximised pane stays empty — which is the exact complaint
+ * this pass is fixing. With `auto-fit`, an odd or single group takes the whole
+ * row and a second column appears only once there is something to put in it. */
+.findings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
 .file-group {
-  margin-bottom: 18px;
+  margin-bottom: 0;
 }
 
 .file-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 9px;
+  padding: 10px 14px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   cursor: pointer;
   user-select: none;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .file-head:hover {
   background: var(--bg-hover);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .file-path {
@@ -1072,12 +1427,20 @@ details.advanced[open] > summary {
 }
 
 .finding {
-  margin-top: 8px;
+  margin-top: 10px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--sev-unknown);
   border-radius: var(--radius);
   background: var(--bg-elev);
   overflow: hidden;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.2s ease;
+}
+
+.finding:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  box-shadow: 0 10px 28px -20px rgba(0, 0, 0, 0.9);
 }
 
 .finding.sev-critical {
@@ -1096,9 +1459,9 @@ details.advanced[open] > summary {
 .finding-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 14px 0;
+  padding: 12px 16px 0;
 }
 
 .finding-lines {
@@ -1110,9 +1473,10 @@ details.advanced[open] > summary {
 }
 
 .finding-content {
-  padding: 8px 14px 12px;
+  padding: 10px 16px 14px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  line-height: 1.7;
 }
 
 .finding-content code {
@@ -1125,8 +1489,8 @@ details.advanced[open] > summary {
 
 .finding-actions {
   display: flex;
-  gap: 6px;
-  padding: 0 14px 12px;
+  gap: 8px;
+  padding: 0 16px 14px;
   flex-wrap: wrap;
 }
 
@@ -1499,19 +1863,49 @@ pre.code {
   z-index: 100;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 8px;
   max-width: 420px;
+  /* The host spans a corner of the screen; only the toasts themselves should
+   * be clickable, so the gap between them stays transparent to the pointer. */
+  pointer-events: none;
 }
 
 .toast {
   padding: 10px 14px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  background: rgba(26, 26, 26, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
   font-size: 12px;
-  animation: rise 0.16s ease;
   overflow-wrap: anywhere;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* Enter and leave are transitions rather than a keyframe so that
+ * `<TransitionGroup>` can also animate the neighbours sliding up. */
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(22px) scale(0.97);
+}
+
+.toast-enter-active {
+  transition:
+    opacity 0.24s var(--ease-spring),
+    transform 0.24s var(--ease-spring);
+}
+
+.toast-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.toast-move {
+  transition: transform 0.24s var(--ease-out);
 }
 
 .toast.error {
@@ -1524,9 +1918,437 @@ pre.code {
   color: #7fdcab;
 }
 
-@keyframes rise {
+/* ------------------------------------------------------------------ *
+ * Motion
+ *
+ * Everything that moves lives here so the whole app's timing can be read (and
+ * disabled) in one place. The reduced-motion block at the very bottom of the
+ * file switches all of it off.
+ * ------------------------------------------------------------------ */
+
+/* A view arriving: the whole pane, header included. */
+@keyframes view-in {
   from {
     opacity: 0;
     transform: translateY(6px);
   }
 }
+
+/* A section arriving inside a view. */
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+}
+
+/* A list row arriving. */
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-7px);
+  }
+}
+
+/* The accent bar on the active session. */
+@keyframes bar-in {
+  from {
+    transform: scaleY(0.2);
+    opacity: 0;
+  }
+}
+
+/* "Something is running on this row." */
+@keyframes dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(43, 222, 94, 0.55);
+  }
+  60% {
+    box-shadow: 0 0 0 5px rgba(43, 222, 94, 0);
+  }
+}
+
+/* Slow vertical float for the logo on the welcome page. */
+@keyframes float-y {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+/* Placeholder shimmer while the home page reads recent history. */
+@keyframes shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+.skeleton {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 0%,
+    rgba(255, 255, 255, 0.14) 50%,
+    rgba(255, 255, 255, 0.05) 100%
+  );
+  background-size: 220% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------------ *
+ * Review workbench
+ *
+ * The configuration page is four cards. Stacked, a maximised window leaves
+ * three quarters of each card empty, so past 1600px the parameters move beside
+ * the file preview they control while the scope picker and the run panel keep
+ * the full width. Below that the original single column is unchanged.
+ * ------------------------------------------------------------------ */
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+/* The gap owns the vertical rhythm inside the grid. */
+.review-grid > .card {
+  margin-bottom: 0;
+}
+
+@media (min-width: 1600px) {
+  .review-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-grid > .review-span {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Welcome / home
+ * ------------------------------------------------------------------ */
+
+/* The landing page is prose-and-cards, so it is capped narrower than the
+ * workbench views: nothing here benefits from a 1700px line length. */
+.home {
+  max-width: min(100%, 1240px);
+  margin-inline: auto;
+}
+
+.hero {
+  position: relative;
+  padding: clamp(22px, 3vw, 44px) 0 clamp(20px, 2.4vw, 30px);
+  text-align: center;
+}
+
+/* Lift + glow under the mark. Purely decorative, and it is what stops the top
+ * of an otherwise empty first screen from reading as unfinished. */
+.hero-mark {
+  position: relative;
+  display: inline-flex;
+  margin-bottom: 12px;
+}
+
+.hero-mark::after {
+  content: '';
+  position: absolute;
+  inset: -30% -60%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(43, 222, 94, 0.22), transparent 68%);
+  filter: blur(18px);
+  z-index: -1;
+}
+
+.hero-mark img {
+  display: block;
+  animation: float-y 6.5s ease-in-out infinite;
+  filter: drop-shadow(0 12px 26px rgba(43, 222, 94, 0.22));
+}
+
+.hero h1 {
+  margin: 0 0 6px;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.hero-sub {
+  margin: 0 auto 16px;
+  max-width: 62ch;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.hero-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hero-pills {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+/* Environment / activity facts, laid out on the same auto-fit grid idea as
+ * the rest of the app so the row rebalances with the window. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  transition:
+    border-color 0.18s ease,
+    transform 0.18s var(--ease-out);
+}
+
+.stat:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  transform: translateY(-2px);
+}
+
+.stat-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  font-size: 15px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text-dim);
+}
+
+.stat.ok .stat-icon {
+  color: var(--accent);
+  border-color: rgba(43, 222, 94, 0.32);
+  background: var(--accent-soft);
+}
+
+.stat.bad .stat-icon {
+  color: var(--sev-critical);
+  border-color: rgba(255, 95, 86, 0.32);
+  background: rgba(255, 95, 86, 0.12);
+}
+
+.stat-body {
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Recent history beside the getting-started notes on wide windows, stacked on
+ * narrow ones. */
+.home-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.home-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.home-item {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  animation: row-in 0.26s var(--ease-out) both;
+  animation-delay: calc(min(var(--row-i, 0), 10) * 22ms);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.home-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-soft);
+}
+
+.home-item-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-item-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps li {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  counter-increment: step;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.steps li::before {
+  content: counter(step);
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(43, 222, 94, 0.28);
+}
+
+.steps strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ *
+ * Responsive
+ * ------------------------------------------------------------------ */
+
+/* Narrow window (the app's minimum is 1040px, so this is the squeezed end of
+ * the range): give the rail back some width and let the control rows wrap
+ * instead of crushing their fields. */
+@media (max-width: 1180px) {
+  :root {
+    --sidebar-width: 250px;
+  }
+
+  .brand {
+    font-size: 16px;
+  }
+
+  .brand-version {
+    display: none;
+  }
+
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .row > * {
+    flex: 1 1 220px;
+  }
+}
+
+/* Wide window: use the second half of the pane instead of leaving it black.
+ * The findings grid does this for itself (see `auto-fit` above); this is the
+ * filter card, whose two toggle rows always exist and so can always pair up. */
+@media (min-width: 1700px) {
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Recent history beside the getting-started steps as soon as there is room for
+ * two usable columns — at the default 1440px window too, so the landing page is
+ * complete without scrolling. Below this they stack. */
+@media (min-width: 1240px) {
+  .home-cols {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Reduced motion
+ *
+ * One switch for every decorative animation in the app, including the ambient
+ * background, which is hidden outright: a slowly drifting glow is exactly the
+ * kind of thing this preference exists to stop.
+ * ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .bg-fx__orb,
+  .bg-fx__sheen {
+    display: none;
+  }
+
+  .bg-fx__grid {
+    animation: none;
+  }
+}
+

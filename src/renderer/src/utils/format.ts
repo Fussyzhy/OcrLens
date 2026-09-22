@@ -1,4 +1,4 @@
-import type { Category, Severity } from '@shared/types'
+import type { Category, SessionSummary, Severity } from '@shared/types'
 
 /**
  * Display helpers.
@@ -77,6 +77,24 @@ export function modeLabel(mode: string | undefined): string {
 export function stateLabel(state: string | undefined): string {
   if (!state) return '未知'
   return STATE_LABELS[state] ?? state
+}
+
+/**
+ * Resolves a session's outcome for the status dot.
+ *
+ * `run_manifest.terminal_state` is authoritative when present; older sessions
+ * (`legacy: true`) have none, so the per-file counters are used to infer one
+ * instead of showing everything as unknown. Shared by the rail and the home
+ * page so a session cannot be "完成" in one place and "跳过" in the other.
+ */
+export function sessionState(session: SessionSummary): string {
+  const state = session.run_manifest?.terminal_state
+  if (state) return state
+  if (session.aborted) return 'aborted'
+  if (session.selected_files > 0 && session.completed_files === 0 && session.failed_files > 0) {
+    return 'failed'
+  }
+  return session.completed_files > 0 ? 'complete' : 'skipped'
 }
 
 /** Formats a nanosecond duration from a session summary. */

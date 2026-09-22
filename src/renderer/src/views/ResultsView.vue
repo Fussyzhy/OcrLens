@@ -219,8 +219,8 @@ async function copyMarkdown(): Promise<void> {
 
       <!-- Filters -->
       <div v-if="results.comments.length" class="card">
-        <div class="card-body">
-          <div class="inline" style="margin-bottom: 12px">
+        <div class="card-body filter-grid">
+          <div class="filter-row">
             <span class="muted" style="min-width: 40px">严重度</span>
             <div class="sev-toggles">
               <button
@@ -236,7 +236,7 @@ async function copyMarkdown(): Promise<void> {
             </div>
           </div>
 
-          <div class="inline" style="margin-bottom: 12px">
+          <div class="filter-row">
             <span class="muted" style="min-width: 40px">类别</span>
             <div class="sev-toggles">
               <button
@@ -252,13 +252,12 @@ async function copyMarkdown(): Promise<void> {
             </div>
           </div>
 
-          <div class="inline">
+          <div class="filter-row filter-row--wide">
             <input
               v-model="results.search"
               type="text"
               placeholder="在 finding 内容与代码中搜索…"
               spellcheck="false"
-              style="flex: 1"
             />
             <button class="btn sm" @click="results.resetFilters()">重置筛选</button>
             <span class="muted nowrap">显示 {{ results.filtered.length }} / {{ results.comments.length }}</span>
@@ -278,20 +277,25 @@ async function copyMarkdown(): Promise<void> {
       </div>
 
       <template v-else>
-        <div v-for="group in results.groups" :key="group.path" class="file-group">
-          <div class="file-head" @click="results.toggleFile(group.path)">
-            <span class="chevron" :class="{ open: !results.isCollapsed(group.path) }">▶</span>
-            <span class="file-path" :title="group.path">{{ group.path }}</span>
-            <span class="file-count">{{ group.comments.length }} 项</span>
-          </div>
+        <!-- A grid rather than a plain stack: at wide widths the media query in
+             styles.css splits this into two columns so a maximised window is
+             used for findings instead of leaving half the pane empty. -->
+        <div class="findings-grid">
+          <div v-for="group in results.groups" :key="group.path" class="file-group">
+            <div class="file-head" @click="results.toggleFile(group.path)">
+              <span class="chevron" :class="{ open: !results.isCollapsed(group.path) }" />
+              <span class="file-path" :title="group.path">{{ group.path }}</span>
+              <span class="file-count">{{ group.comments.length }} 项</span>
+            </div>
 
-          <template v-if="!results.isCollapsed(group.path)">
-            <FindingCard
-              v-for="comment in group.comments"
-              :key="results.findingKey(comment)"
-              :comment="comment"
-            />
-          </template>
+            <template v-if="!results.isCollapsed(group.path)">
+              <FindingCard
+                v-for="comment in group.comments"
+                :key="results.findingKey(comment)"
+                :comment="comment"
+              />
+            </template>
+          </div>
         </div>
       </template>
     </template>

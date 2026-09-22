@@ -4,7 +4,7 @@ import type { RepoEntry, SessionListEntry, SessionSummary } from '@shared/types'
 import { useEnvStore } from '../stores/env'
 import { useRepoStore } from '../stores/repos'
 import { useUiStore } from '../stores/ui'
-import { formatRelative, modeLabel, stateLabel } from '../utils/format'
+import { formatRelative, modeLabel, sessionState, stateLabel } from '../utils/format'
 import ConfirmDialog from './ConfirmDialog.vue'
 import logoUrl from '../assets/ocrlens-logo.png'
 
@@ -29,23 +29,6 @@ let renameAborted = false
 const pendingDelete = ref<{ repo: RepoEntry; session: SessionListEntry } | null>(null)
 /** True while a confirmed delete is in flight; see `confirmDelete`. */
 let deleting = false
-
-/**
- * Resolves a session's outcome for the status dot.
- *
- * `run_manifest.terminal_state` is authoritative when present; older sessions
- * (`legacy: true`) have none, so we infer from the per-file counters instead of
- * showing everything as unknown.
- */
-function sessionState(session: SessionSummary): string {
-  const state = session.run_manifest?.terminal_state
-  if (state) return state
-  if (session.aborted) return 'aborted'
-  if (session.selected_files > 0 && session.completed_files === 0 && session.failed_files > 0) {
-    return 'failed'
-  }
-  return session.completed_files > 0 ? 'complete' : 'skipped'
-}
 
 function onSessionClick(repo: RepoEntry, session: SessionSummary): void {
   if (editingId.value === session.session_id) return
@@ -173,11 +156,12 @@ watch(
         </div>
 
         <button
-          v-for="match in repos.searchMatches"
+          v-for="(match, matchIndex) in repos.searchMatches"
           :key="match.session.session_id"
           class="search-hit"
           :class="{ active: match.session.session_id === repos.activeSessionId }"
           :data-session-id="match.session.session_id"
+          :style="{ '--row-i': Math.min(matchIndex, 10) }"
           @click="repos.openSession(match.repo, match.session.session_id)"
         >
           <span class="status-dot" :class="sessionState(match.session)" />
@@ -211,10 +195,9 @@ watch(
               class="chevron"
               :class="{ open: repos.isExpanded(repo) }"
               :title="repos.isExpanded(repo) ? '收起会话' : '展开会话'"
+              :aria-expanded="repos.isExpanded(repo)"
               @click.stop="repos.toggleExpand(repo)"
-            >
-              ▶
-            </button>
+            />
 
             <span class="repo-name" :class="{ missing: !repo.exists }" :title="repo.dir || repo.key">
               {{ repo.name }}
@@ -231,13 +214,14 @@ watch(
 
             <template v-else>
               <div
-                v-for="session in repos.sessions[repos.repoKey(repo)] ?? []"
+                v-for="(session, sessionIndex) in repos.sessions[repos.repoKey(repo)] ?? []"
                 :key="session.session_id"
                 class="session-row"
                 :class="{
                   active: session.session_id === repos.activeSessionId,
                   busy: repos.isBusy(session.session_id)
                 }"
+                :style="{ '--row-i': Math.min(sessionIndex, 12) }"
                 :title="`${repos.sessionLabel(session)}\n${session.session_id}\n${session.git_branch}`"
                 :data-session-id="session.session_id"
                 @click="onSessionClick(repo, session)"
@@ -306,10 +290,13 @@ watch(
 
     <div class="sidebar-foot">
       <button class="btn sm" style="flex: 1" @click="repos.addRepo()">＋ 添加仓库</button>
-      <button class="btn sm" title="刷新列表" @click="repos.load()">⟳</button>
+      <button class="btn sm foot-icon" title="刷新列表" aria-label="刷新列表" @click="repos.load()">
+        ⟳
+      </button>
       <button
-        class="btn sm"
+        class="btn sm foot-icon"
         title="设置"
+        aria-label="设置"
         :class="{ primary: ui.view === 'settings' }"
         @click="ui.showView('settings')"
       >
