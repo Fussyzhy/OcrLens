@@ -24,8 +24,13 @@ import { readSettings, writeSettings } from './settings'
  * repository is expanded.
  */
 
-/** Reads the first JSONL record's `cwd`, which is the repo the session ran in. */
-async function peekCwd(file: string): Promise<string | null> {
+/**
+ * Reads the first JSONL record's `cwd`, which is the repo the session ran in.
+ *
+ * Exported because `sessions.deleteSession` needs the same reading before it may
+ * move a session file; a second copy of this parsing would drift.
+ */
+export async function peekCwd(file: string): Promise<string | null> {
   let handle: fs.promises.FileHandle | null = null
   try {
     handle = await fs.promises.open(file, 'r')

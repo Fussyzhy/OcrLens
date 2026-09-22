@@ -1,18 +1,33 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
-import type { RepoEntry, SessionSummary } from '@shared/types'
+import { computed, ref, watch } from 'vue'
+import type { RepoEntry, SessionListEntry } from '@shared/types'
 import { unwrap } from '../utils/ipc'
+import { useEnvStore } from './env'
 import { useResultsStore } from './results'
 import { useUiStore } from './ui'
+
+/** How many repositories to fetch session lists for at once while searching. */
+const SEARCH_CONCURRENCY = 4
+
+/** Give up on automatic naming after this many failures in a row. */
+const TITLE_FAILURE_LIMIT = 3
+
+export interface SessionMatch {
+  repo: RepoEntry
+  session: SessionListEntry
+}
 
 /**
  * The repository / session tree shown in the left rail.
  *
  * Session lists are fetched lazily on expand, because discovery already knows the
  * counts from the filesystem — pulling full summaries for every repository at
- * startup would spawn one CLI process per repo for no visible benefit.
+ * startup would spawn one CLI process per repo for no visible benefit. Searching
+ * by title is the one operation that legitimately needs all of them, so it loads
+ * the rest on demand.
  */
 export const useRepoStore = defineStore('repos', () => {
+  const env = useEnvStore()
   const results = useResultsStore()
   const ui = useUiStore()
 
@@ -23,13 +38,21 @@ export const useRepoStore = defineStore('repos', () => {
   /** Repo identifiers whose children are visible. */
   const expanded = ref<string[]>([])
   /** Session summaries keyed by repo identifier. */
-  const sessions = ref<Record<string, SessionSummary[]>>({})
+  const sessions = ref<Record<string, SessionListEntry[]>>({})
   const loadingSessions = ref<string[]>([])
   const sessionErrors = ref<Record<string, string>>({})
+  /** Session ids with an in-flight rename / generate / delete. */
+  const busySessions = ref<string[]>([])
+  /** How many operations are in flight per session id; see `withBusy`. */
+  const busyCounts = new Map<string, number>()
 
   const activeRepoDir = ref<string | null>(null)
   const activeSessionId = ref<string | null>(null)
   const query = ref('')
+  /** True while a search is fetching the session lists it needs. */
+  const searchLoading = ref(false)
+  /** In-flight `ensureAllSessionsLoaded` calls; the flag clears when this hits 0. */
+  let searchLoads = 0
 
   /** Stable identifier for a repo: its path when known, else the storage key. */
   function repoKey(repo: RepoEntry): string {
@@ -40,22 +63,16 @@ export const useRepoStore = defineStore('repos', () => {
     () => repos.value.find((r) => r.dir === activeRepoDir.value) ?? null
   )
 
-  /** Repos matching the search box. Matching a session keeps its repo visible. */
-  const visibleRepos = computed<RepoEntry[]>(() => {
-    const needle = query.value.trim().toLowerCase()
-    if (!needle) return repos.value
-
-    return repos.value.filter((repo) => {
-      if (repo.name.toLowerCase().includes(needle)) return true
-      if (repo.dir.toLowerCase().includes(needle)) return true
-      const list = sessions.value[repoKey(repo)] ?? []
-      return list.some((s) => sessionLabel(s).toLowerCase().includes(needle))
-    })
-  })
-
-  /** One-line description of a session, used for search and display. */
-  function sessionLabel(session: SessionSummary): string {
+  /**
+   * Everything a search can match for one session.
+   *
+   * The title comes first because that is what the user is looking for, but the
+   * branch, mode and timestamp stay searchable so a session that has no title yet
+   * is still findable.
+   */
+  function sessionHaystack(session: SessionListEntry): string {
     return [
+      session.title,
       session.review_mode,
       session.git_branch,
       session.model,
@@ -63,7 +80,32 @@ export const useRepoStore = defineStore('repos', () => {
     ]
       .filter(Boolean)
       .join(' ')
+      .toLowerCase()
   }
+
+  /** The primary label for a session: its title, or a sensible fallback. */
+  function sessionLabel(session: SessionListEntry): string {
+    if (session.title) return session.title
+    const parts = [session.review_mode, session.git_branch].filter(Boolean)
+    return parts.length ? parts.join(' · ') : session.session_id.slice(0, 8)
+  }
+
+  /** Sessions whose title or metadata match the query, across every repo. */
+  const searchMatches = computed<SessionMatch[]>(() => {
+    const needle = query.value.trim().toLowerCase()
+    if (!needle) return []
+
+    const out: SessionMatch[] = []
+    for (const repo of repos.value) {
+      for (const session of sessions.value[repoKey(repo)] ?? []) {
+        if (sessionHaystack(session).includes(needle)) out.push({ repo, session })
+      }
+    }
+    return out
+  })
+
+  /** Repos shown in the rail. Search results are a separate, flat list. */
+  const visibleRepos = computed<RepoEntry[]>(() => repos.value)
 
   async function load(): Promise<void> {
     loading.value = true
@@ -111,6 +153,94 @@ export const useRepoStore = defineStore('repos', () => {
     }
     expanded.value = [...expanded.value, key]
     await loadSessions(repo)
+    // Opening a repository's history is what makes names worth paying for. The
+    // naming queue is fed from here rather than from `loadSessions`, because a
+    // search also loads session lists — and loading a list to match a string
+    // must never cost one model call per session in every repository.
+    enqueueTitles(repo.dir, sessions.value[key] ?? [])
+  }
+
+  /**
+   * Fetches the session lists a search needs.
+   *
+   * Run with a small concurrency cap: each lookup spawns the CLI, so firing one
+   * per repository at once would be rude on a machine with many repos.
+   */
+  async function ensureAllSessionsLoaded(): Promise<void> {
+    const pending = repos.value.filter(
+      (repo) =>
+        repo.dir &&
+        !sessions.value[repoKey(repo)] &&
+        !loadingSessions.value.includes(repoKey(repo))
+    )
+    if (!pending.length) return
+
+    // Counted, not a flag: typing re-enters this while the previous batch is
+    // still fetching, and whichever call finished first used to clear
+    // `searchLoading` while later ones were still spawning the CLI.
+    searchLoads += 1
+    searchLoading.value = true
+    const queue = [...pending]
+
+    try {
+      const workers = Array.from({ length: Math.min(SEARCH_CONCURRENCY, queue.length) }, async () => {
+        for (;;) {
+          const repo = queue.shift()
+          if (!repo) return
+          await loadSessions(repo)
+        }
+      })
+      await Promise.all(workers)
+    } finally {
+      searchLoads -= 1
+      if (searchLoads <= 0) {
+        searchLoads = 0
+        searchLoading.value = false
+      }
+    }
+  }
+
+  /** Replaces one cached session so the rail updates without a full reload. */
+  function patchSession(
+    repoDir: string,
+    sessionId: string,
+    patch: (session: SessionListEntry) => SessionListEntry
+  ): void {
+    const repo = repos.value.find((r) => r.dir === repoDir)
+    if (!repo) return
+    const key = repoKey(repo)
+    const list = sessions.value[key]
+    if (!list) return
+    sessions.value = {
+      ...sessions.value,
+      [key]: list.map((session) => (session.session_id === sessionId ? patch(session) : session))
+    }
+  }
+
+  function isBusy(sessionId: string): boolean {
+    return busySessions.value.includes(sessionId)
+  }
+
+  async function withBusy<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    // Ref-counted: two operations can overlap on one session (a title job that
+    // is already draining when the user confirms a delete), and the old
+    // `filter` removed *every* entry for the id, so whichever finished first
+    // cleared the spinner while the other was still running.
+    busyCounts.set(sessionId, (busyCounts.get(sessionId) ?? 0) + 1)
+    if (!busySessions.value.includes(sessionId)) {
+      busySessions.value = [...busySessions.value, sessionId]
+    }
+    try {
+      return await fn()
+    } finally {
+      const remaining = (busyCounts.get(sessionId) ?? 1) - 1
+      if (remaining > 0) {
+        busyCounts.set(sessionId, remaining)
+      } else {
+        busyCounts.delete(sessionId)
+        busySessions.value = busySessions.value.filter((id) => id !== sessionId)
+      }
+    }
   }
 
   /** Clicking a repo name opens the "new review" workbench for it. */
@@ -161,10 +291,214 @@ export const useRepoStore = defineStore('repos', () => {
     ui.notify(`已从侧栏移除：${repo.name}（会话记录保留在磁盘上）`, 'info')
   }
 
-  /** Re-reads one repo's session list, e.g. after a run finishes. */
+  /**
+   * Re-reads one repo's session list, e.g. after a run finishes.
+   *
+   * Loads even when the repo was never expanded: the new session has to be known
+   * for it to be named, and a review that produced a session is worth showing in
+   * the rail regardless of what was open at the time. This is also what names the
+   * session a run just created, so it happens without any user action.
+   */
   async function refreshSessions(repoDir: string): Promise<void> {
     const repo = repos.value.find((r) => r.dir === repoDir)
-    if (repo) await loadSessions(repo, true)
+    if (!repo) return
+    await loadSessions(repo, true)
+    enqueueTitles(repoDir, sessions.value[repoKey(repo)] ?? [])
+  }
+
+  /* ---------------- titles ---------------- */
+
+  /**
+   * Renames a session by hand.
+   *
+   * Emptying the field does not leave the session nameless: it hands the session
+   * back to automatic naming, which is the only way to ask for a fresh name
+   * without a dedicated "regenerate" button.
+   */
+  async function renameSession(
+    repoDir: string,
+    sessionId: string,
+    title: string
+  ): Promise<boolean> {
+    const outcome = await withBusy(sessionId, async () => {
+      try {
+        const saved = await unwrap(window.ocr.setSessionTitle(sessionId, title))
+        patchSession(repoDir, sessionId, (session) => ({
+          ...session,
+          title: saved?.title,
+          titleSource: saved?.source
+        }))
+        ui.notify(saved ? '标题已更新' : '已交回自动命名', 'ok')
+        return { ok: true, cleared: !saved }
+      } catch (err) {
+        ui.notifyError(err)
+        return { ok: false, cleared: false }
+      }
+    })
+
+    if (outcome.cleared) {
+      titleSeen.delete(sessionId)
+      const repo = repos.value.find((r) => r.dir === repoDir)
+      enqueueTitles(repoDir, repo ? sessions.value[repoKey(repo)] ?? [] : [])
+    }
+
+    return outcome.ok
+  }
+
+  /* ---------------- automatic naming ----------------
+   *
+   * Titles are produced without being asked for: any session the client learns
+   * about that has no title yet is queued, including sessions that predate this
+   * feature. There is deliberately no "generate" button — naming is a property of
+   * the history list, not an action the user has to remember to take.
+   *
+   * Two safeguards keep that from becoming a nuisance:
+   *
+   * - the queue is drained strictly one at a time, so a first-run backfill of a
+   *   long history never bursts the user's gateway;
+   * - a run of consecutive failures trips a breaker for the rest of the app
+   *   session, so a broken key or model cannot cause one failed request per
+   *   session every time the list is read.
+   *
+   * A session that failed is not retried until the app restarts or the titling
+   * settings change, which is also the natural recovery path.
+   */
+
+  interface TitleJob {
+    repoDir: string
+    sessionId: string
+  }
+
+  const titleQueue: TitleJob[] = []
+  /** Sessions already queued or attempted during this app session. */
+  const titleSeen = new Set<string>()
+  let titleDraining = false
+  let titleFailures = 0
+  let titleBreakerOpen = false
+
+  function enqueueTitles(repoDir: string, list: SessionListEntry[]): void {
+    if (env.settings?.autoTitle === false) return
+    if (titleBreakerOpen || !repoDir) return
+
+    for (const session of list) {
+      // A session that already carries a title is never re-named, which is what
+      // protects names the user wrote by hand.
+      if (session.title) continue
+      if (titleSeen.has(session.session_id)) continue
+      titleSeen.add(session.session_id)
+      titleQueue.push({ repoDir, sessionId: session.session_id })
+    }
+
+    void drainTitles()
+  }
+
+  async function drainTitles(): Promise<void> {
+    if (titleDraining) return
+    titleDraining = true
+
+    try {
+      while (titleQueue.length && !titleBreakerOpen) {
+        const job = titleQueue.shift()
+        if (!job) break
+
+        try {
+          const result = await withBusy(job.sessionId, () =>
+            unwrap(window.ocr.generateTitle(job.repoDir, job.sessionId))
+          )
+          titleFailures = 0
+          patchSession(job.repoDir, job.sessionId, (session) => ({
+            ...session,
+            title: result.title,
+            titleSource: result.applied ? 'ai' : session.titleSource
+          }))
+        } catch (err) {
+          titleFailures += 1
+          if (titleFailures >= TITLE_FAILURE_LIMIT) {
+            titleBreakerOpen = true
+            titleQueue.length = 0
+            const reason = err instanceof Error ? err.message : String(err)
+            ui.notifyError(
+              `自动生成标题连续失败 ${TITLE_FAILURE_LIMIT} 次，已暂停：${reason}（可在设置页调整生成标题所用的渠道或模型后重试）`
+            )
+          }
+        }
+      }
+    } finally {
+      titleDraining = false
+    }
+  }
+
+  // Changing how titles are produced is the user telling us to try again.
+  //
+  // One getter per field on purpose: a single getter returning an array is
+  // compared by reference, so *any* replacement of `env.settings` — including an
+  // unrelated `gitOverride` edit — looked like a change, resetting the failure
+  // breaker and re-queueing every untitled session for a paid model call.
+  watch(
+    [
+      () => env.settings?.autoTitle,
+      () => env.settings?.titleProvider,
+      () => env.settings?.titleModel
+    ],
+    () => {
+      titleFailures = 0
+      titleBreakerOpen = false
+      titleSeen.clear()
+      // Retry only the repositories whose history is actually open; titled
+      // sessions are skipped by the check in `enqueueTitles`.
+      for (const repo of repos.value) {
+        if (!isExpanded(repo)) continue
+        const list = sessions.value[repoKey(repo)]
+        if (list?.length) enqueueTitles(repo.dir, list)
+      }
+    }
+  )
+
+  /* ---------------- deletion ---------------- */
+
+  /**
+   * Removes a session from history.
+   *
+   * The main process moves the record file into this client's trash rather than
+   * unlinking it, so a mistake is recoverable; the destination is reported back.
+   */
+  async function deleteSession(repo: RepoEntry, session: SessionListEntry): Promise<boolean> {
+    if (!repo.dir) {
+      ui.notifyError('这个仓库的路径无法解析，无法删除会话。')
+      return false
+    }
+
+    return withBusy(session.session_id, async () => {
+      try {
+        const result = await unwrap(window.ocr.deleteSession(repo.dir, session.session_id))
+
+        // Drop it from the cached list immediately so the row disappears even if
+        // the refresh below is slow.
+        const key = repoKey(repo)
+        const list = sessions.value[key] ?? []
+        sessions.value = {
+          ...sessions.value,
+          [key]: list.filter((item) => item.session_id !== session.session_id)
+        }
+
+        if (activeSessionId.value === session.session_id) {
+          activeSessionId.value = null
+          results.clear()
+          ui.showView('new-review')
+        }
+
+        await Promise.all([load(), refreshSessions(repo.dir)])
+        ui.notify(`已删除该历史记录（已移到回收站：${result.trashedTo}）`, 'info')
+        return true
+      } catch (err) {
+        ui.notifyError(err)
+        return false
+      }
+    })
+  }
+
+  function clearSearch(): void {
+    query.value = ''
   }
 
   return {
@@ -175,21 +509,30 @@ export const useRepoStore = defineStore('repos', () => {
     sessions,
     loadingSessions,
     sessionErrors,
+    busySessions,
     activeRepoDir,
     activeSessionId,
     activeRepo,
     query,
+    searchLoading,
     visibleRepos,
+    searchMatches,
     repoKey,
     sessionLabel,
+    sessionHaystack,
     load,
     isExpanded,
     loadSessions,
     toggleExpand,
+    ensureAllSessionsLoaded,
+    isBusy,
     openRepo,
     openSession,
     addRepo,
     removeRepo,
-    refreshSessions
+    refreshSessions,
+    renameSession,
+    deleteSession,
+    clearSearch
   }
 })

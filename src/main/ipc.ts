@@ -22,9 +22,11 @@ import { exportMarkdown } from './exporter'
 import { listBranches, listCommits } from './git'
 import { addRepo, listRepos, removeRepo } from './repos'
 import { previewRun, startRun, type RunHandle } from './runner'
-import { listSessions, sessionComments, sessionDetail } from './sessions'
+import { deleteSession, listSessions, sessionComments, sessionDetail } from './sessions'
 import { readSettings, writeSettings } from './settings'
 import { readSnippet, readWholeFile } from './source'
+import { generateTitle } from './titler'
+import { getTitle, removeTitle, setTitle } from './titles'
 
 /**
  * IPC surface.
@@ -123,6 +125,32 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     exportMarkdown(getWindow(), request)
   )
 
+  handle(IPC.sessionDelete, async (repoDir: string, sessionId: string) =>
+    deleteSession(repoDir, sessionId)
+  )
+
+  /* ---------------- session titles ---------------- */
+
+  handle(IPC.titleSet, async (sessionId: string, title: string) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('缺少会话 id')
+    // Checked like the id above: `title.trim()` on a non-string threw a native
+    // TypeError, which came back as an unreadable runtime error.
+    if (typeof title !== 'string') throw new Error('标题必须是字符串')
+
+    if (!title.trim()) {
+      removeTitle(sessionId)
+      return null
+    }
+
+    const outcome = setTitle(sessionId, title, 'user')
+    if (!outcome.applied) throw new Error('标题不能为空。')
+    return getTitle(sessionId) ?? null
+  })
+
+  handle(IPC.titleGenerate, async (repoDir: string, sessionId: string) =>
+    generateTitle(await ctx(), repoDir, sessionId)
+  )
+
   /* ---------------- git ---------------- */
 
   handle(IPC.gitBranches, async (repoDir: string) => {
@@ -215,7 +243,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.settingsSet, async (patch: Record<string, unknown>) => {
     // Only fields this app owns may be written from the renderer.
     const allowed: Record<string, unknown> = {}
-    for (const key of ['gitOverride', 'ocrOverride']) {
+    for (const key of [
+      'gitOverride',
+      'ocrOverride',
+      'autoTitle',
+      'titleProvider',
+      'titleModel'
+    ]) {
       if (key in patch) allowed[key] = patch[key]
     }
 

@@ -16,7 +16,12 @@ const DEFAULTS: AppSettings = {
   gitOverride: null,
   ocrOverride: null,
   manualRepos: [],
-  ignoredRepos: []
+  ignoredRepos: [],
+  // On by default: a review whose row in the sidebar reads as a UUID is not
+  // meaningfully browsable, and the user asked for a name per run.
+  autoTitle: true,
+  titleProvider: null,
+  titleModel: null
 }
 
 let cache: AppSettings | null = null
@@ -25,17 +30,44 @@ function settingsPath(): string {
   return path.join(app.getPath('userData'), 'settings.json')
 }
 
+/** Accepts a string, or falls back — for the `string | null` fields. */
+function text(value: unknown, fallback: string | null): string | null {
+  return typeof value === 'string' ? value : fallback
+}
+
+/** Accepts an array of strings, ignoring anything else in it. */
+function paths(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+/**
+ * Coerces a settings-shaped object into the shape this app actually promises.
+ *
+ * Both sides of this file's boundary are untrusted: settings.json is
+ * hand-editable (and may have been written by an older version), and a patch
+ * arrives over IPC from the renderer. Without this, a non-string `titleProvider`
+ * was persisted and later reached `providerOverride?.trim()`, failing with a
+ * TypeError that had nothing to do with titles.
+ */
+function normalize(raw: Partial<AppSettings>): AppSettings {
+  return {
+    gitOverride: text(raw.gitOverride, null),
+    ocrOverride: text(raw.ocrOverride, null),
+    manualRepos: paths(raw.manualRepos),
+    ignoredRepos: paths(raw.ignoredRepos),
+    // Absent in settings files written before auto-titling existed.
+    autoTitle: typeof raw.autoTitle === 'boolean' ? raw.autoTitle : DEFAULTS.autoTitle,
+    titleProvider: text(raw.titleProvider, null),
+    titleModel: text(raw.titleModel, null)
+  }
+}
+
 export function readSettings(): AppSettings {
   if (cache) return cache
   try {
-    const text = fs.readFileSync(settingsPath(), 'utf8')
-    const parsed = JSON.parse(text) as Partial<AppSettings>
-    cache = {
-      ...DEFAULTS,
-      ...parsed,
-      manualRepos: Array.isArray(parsed.manualRepos) ? parsed.manualRepos : [],
-      ignoredRepos: Array.isArray(parsed.ignoredRepos) ? parsed.ignoredRepos : []
-    }
+    const contents = fs.readFileSync(settingsPath(), 'utf8')
+    const parsed = JSON.parse(contents) as Partial<AppSettings>
+    cache = normalize(parsed)
   } catch {
     // Missing or corrupt settings fall back to defaults rather than failing boot.
     cache = { ...DEFAULTS }
@@ -44,7 +76,7 @@ export function readSettings(): AppSettings {
 }
 
 export function writeSettings(patch: Partial<AppSettings>): AppSettings {
-  const next: AppSettings = { ...readSettings(), ...patch }
+  const next = normalize({ ...readSettings(), ...patch })
   const file = settingsPath()
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })

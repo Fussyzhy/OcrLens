@@ -55,7 +55,7 @@ export function buildSessionMarkdown(input: MarkdownReportInput): string {
   /* ---------------- title ---------------- */
 
   out.push(`# OCR 审查报告 · ${baseName(repoDir) || 'repository'}`, '')
-  out.push('> 由 ocr-client 从 ocr 会话导出，可直接阅读，也可以整份交给编码 agent 处理。')
+  out.push('> 由 OcrLens 从 ocr 会话导出，可直接阅读，也可以整份交给编码 agent 处理。')
   out.push('> finding 由模型生成，存在误报可能：动手前请先核对对应代码。', '')
 
   /* ---------------- session facts ---------------- */

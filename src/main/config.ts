@@ -4,6 +4,7 @@ import path from 'node:path'
 import type {
   ConfigBackup,
   ConfigTestResult,
+  LlmProtocol,
   MutateResultView,
   OcrConfigView,
   ProviderInfo
@@ -101,6 +102,60 @@ function parseBuiltinProviders(output: string): ProviderInfo[] {
   return out
 }
 
+/**
+ * Protocols this client's minimal LLM client actually implements.
+ *
+ * `LlmProtocol` is deliberately open-ended because the CLI adds protocols over
+ * time, but an unknown value used to fall through every branch in `llm.ts` and
+ * take the OpenAI `/chat/completions` path — a wrong URL and wrong auth scheme
+ * reported as a confusing gateway error. Better to refuse up front.
+ * `anthropic-bedrock` is listed because `llm.ts` rejects it with its own
+ * specific message rather than pretending to support it.
+ */
+const SUPPORTED_PROTOCOLS = new Set([
+  'openai',
+  'anthropic',
+  'openai-responses',
+  'anthropic-bedrock'
+])
+
+/**
+ * Built-in provider catalogue cache.
+ *
+ * `ocr llm providers` spawns a CLI process (30s timeout). Titling resolves a
+ * target per session, so without this a first-run backfill of a long history
+ * would spawn one extra process per session for information that only changes
+ * when the user edits the config. A short TTL bounds staleness for config edits
+ * made in a terminal, and every write path here invalidates it outright.
+ */
+const BUILTIN_CACHE_MS = 60_000
+let builtinCache: { key: string; at: number; providers: ProviderInfo[] } | null = null
+
+/** Drops the catalogue cache after anything that could change the config. */
+export function invalidateBuiltinProviders(): void {
+  builtinCache = null
+}
+
+function launchKey(launch: OcrLaunch | null): string {
+  return launch ? `${launch.exe}\u0000${launch.prefix.join('\u0000')}` : ''
+}
+
+/** Reads the CLI's built-in provider catalogue, reusing a recent answer. */
+async function builtinProviders(
+  launch: OcrLaunch,
+  gitBinDir: string | null
+): Promise<ProviderInfo[]> {
+  const key = launchKey(launch)
+  if (builtinCache && builtinCache.key === key && Date.now() - builtinCache.at < BUILTIN_CACHE_MS) {
+    return builtinCache.providers
+  }
+
+  const listed = await execOcr(launch, ['llm', 'providers'], gitBinDir, { timeoutMs: 30_000 })
+  const providers = parseBuiltinProviders(listed.stdout || listed.stderr)
+  builtinCache = { key, at: Date.now(), providers }
+  return providers
+}
+
 /** Reads the CLI config plus the built-in provider catalogue. */
 export async function readConfigView(
   launch: OcrLaunch | null,
@@ -115,10 +170,7 @@ export async function readConfigView(
 
   // Built-in providers advertised by the CLI.
   if (launch) {
-    const listed = await execOcr(launch, ['llm', 'providers'], gitBinDir, { timeoutMs: 30_000 })
-    for (const info of parseBuiltinProviders(listed.stdout || listed.stderr)) {
-      providers.push(info)
-    }
+    providers.push(...(await builtinProviders(launch, gitBinDir)))
   }
 
   const mergeEntry = (name: string, entry: RawProviderEntry, custom: boolean): void => {
@@ -162,6 +214,77 @@ export async function readConfigView(
     providers,
     configPath: ocrConfigPath(),
     parseError
+  }
+}
+
+/** Everything needed to call the configured model directly. */
+export interface ResolvedLlmTarget {
+  provider: string
+  protocol: LlmProtocol
+  url: string
+  apiKey: string
+  model: string
+}
+
+/**
+ * Resolves the raw connection details for the configured provider.
+ *
+ * Titling needs this because it talks to the model itself: unlike the renderer,
+ * which only ever sees `apiKeyMask`, the caller here receives the real key. That
+ * is why this lives in the main process next to the rest of the config handling
+ * rather than being derived from the masked view.
+ *
+ * Provider and model can be overridden so the user can name a cheaper model for
+ * titling than the one used for reviews.
+ */
+export async function resolveLlmTarget(
+  launch: OcrLaunch | null,
+  gitBinDir: string | null,
+  providerOverride?: string | null,
+  modelOverride?: string | null
+): Promise<ResolvedLlmTarget> {
+  const { config } = readRawConfig()
+
+  const provider = (providerOverride?.trim() || config.provider || '').trim()
+  if (!provider) {
+    throw new Error('ocr 配置里没有指定渠道，无法生成标题。')
+  }
+
+  const entry: RawProviderEntry =
+    config.custom_providers?.[provider] ?? config.providers?.[provider] ?? {}
+
+  let url = entry.url?.trim() ?? ''
+  // The protocol comes from a hand-editable JSON file, so it is an arbitrary
+  // string at this point; `?? undefined` here was a no-op that made it look
+  // validated when it was not.
+  let protocol = entry.protocol?.trim() || undefined
+
+  // Built-in providers keep their base URL and protocol inside the CLI, not in
+  // config.json, so fall back to the catalogue only when the file is silent.
+  if ((!url || !protocol) && launch) {
+    const view = await readConfigView(launch, gitBinDir)
+    const info = view.providers.find((p) => p.name === provider)
+    url = url || info?.url || ''
+    protocol = protocol ?? (info?.protocol as LlmProtocol | undefined)
+  }
+
+  const resolved = (protocol ?? 'openai').trim()
+  if (!SUPPORTED_PROTOCOLS.has(resolved)) {
+    throw new Error(
+      `渠道 ${provider} 的协议「${resolved}」本客户端不支持，无法生成标题（支持：` +
+        `${[...SUPPORTED_PROTOCOLS].join('、')}）。请在设置页改用它支持的渠道。`
+    )
+  }
+
+  const model = (modelOverride?.trim() || entry.model || config.model || '').trim()
+  if (!model) throw new Error('没有可用的模型名，无法生成标题。')
+
+  return {
+    provider,
+    protocol: resolved as LlmProtocol,
+    url,
+    apiKey: entry.api_key?.trim() ?? '',
+    model
   }
 }
 
@@ -243,6 +366,7 @@ export async function restoreBackup(backupPath: string): Promise<{ ok: boolean; 
     await fs.promises.mkdir(ocrStateDir(), { recursive: true })
     await backupConfig()
     await fs.promises.copyFile(resolved, ocrConfigPath())
+    invalidateBuiltinProviders()
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -275,6 +399,7 @@ export async function configSet(
   if (result.code !== 0) {
     return { ok: false, output, backupPath, error: output || `ocr config set exited ${result.code}` }
   }
+  invalidateBuiltinProviders()
   return { ok: true, output, backupPath }
 }
 
@@ -295,6 +420,7 @@ export async function configUnset(
   if (result.code !== 0) {
     return { ok: false, output, backupPath, error: output || `ocr config unset exited ${result.code}` }
   }
+  invalidateBuiltinProviders()
   return { ok: true, output, backupPath }
 }
 

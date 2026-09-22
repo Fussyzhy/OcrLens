@@ -50,6 +50,13 @@ const api: OcrApiSurface = {
   sessionComments: (repoDir: string, sessionId: string, filter) =>
     invoke(IPC.sessionComments, repoDir, sessionId, filter),
   exportSessionMarkdown: (request) => invoke(IPC.sessionExportMarkdown, request),
+  deleteSession: (repoDir: string, sessionId: string) =>
+    invoke(IPC.sessionDelete, repoDir, sessionId),
+
+  /* session titles */
+  setSessionTitle: (sessionId: string, title: string) => invoke(IPC.titleSet, sessionId, title),
+  generateTitle: (repoDir: string, sessionId: string) =>
+    invoke(IPC.titleGenerate, repoDir, sessionId),
 
   /* git */
   gitBranches: (repoDir: string) => invoke(IPC.gitBranches, repoDir),

@@ -3,6 +3,7 @@ import type {
   CommentFilter,
   ConfigBackup,
   ConfigTestResult,
+  DeleteSessionResult,
   EnvInfo,
   ExportMarkdownRequest,
   ExportMarkdownResult,
@@ -19,7 +20,9 @@ import type {
   RunProgress,
   RunResult,
   SessionDetail,
-  SessionSummary
+  SessionListEntry,
+  SessionTitle,
+  TitleResult
 } from './types'
 
 /**
@@ -62,13 +65,32 @@ export interface OcrApiSurface {
   pickRepo(): Promise<IpcResult<string | null>>
 
   /* sessions */
-  listSessions(repoDir: string, limit?: number): Promise<IpcResult<SessionSummary[]>>
+  listSessions(repoDir: string, limit?: number): Promise<IpcResult<SessionListEntry[]>>
   sessionDetail(repoDir: string, sessionId: string): Promise<IpcResult<SessionDetail>>
   sessionComments(
     repoDir: string,
     sessionId: string,
     filter?: CommentFilter
   ): Promise<IpcResult<ReviewComment[]>>
+  /**
+   * Removes one session from history.
+   *
+   * The underlying file is moved into this client's own trash folder rather than
+   * unlinked, so the operation stays recoverable; `trashedTo` reports where.
+   */
+  deleteSession(repoDir: string, sessionId: string): Promise<IpcResult<DeleteSessionResult>>
+
+  /* session titles (client-owned; ocr has no title concept) */
+  /** Renames a session. An empty title clears it. */
+  setSessionTitle(sessionId: string, title: string): Promise<IpcResult<SessionTitle | null>>
+  /**
+   * Asks the model for a name for one session.
+   *
+   * Not a user-facing action — the renderer calls this from a background queue for
+   * every session it learns about that has no title yet. Sessions the user renamed
+   * by hand come back with `applied: false` instead of being overwritten.
+   */
+  generateTitle(repoDir: string, sessionId: string): Promise<IpcResult<TitleResult>>
   /**
    * Writes a rendered Markdown report, asking the user where to put it first.
    *

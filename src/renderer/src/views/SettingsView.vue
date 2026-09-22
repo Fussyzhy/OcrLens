@@ -250,6 +250,58 @@ async function reprobe(): Promise<void> {
   gitOverrideDraft.value = env.settings?.gitOverride ?? ''
   ui.notify('环境已重新探测', 'ok')
 }
+
+/* ---------------- session titles ---------------- */
+
+/**
+ * A stored `titleProvider` that is no longer among the configured providers.
+ *
+ * `titleProvider` is a persisted string, so deleting a provider (or editing
+ * ocr's config elsewhere) can leave it pointing at nothing. The `<select>` would
+ * then have no matching option and render blank, hiding the fact that automatic
+ * naming is broken; this is what the placeholder option below shows.
+ */
+const staleTitleProvider = computed<string | null>(() => {
+  const name = env.settings?.titleProvider
+  if (!name) return null
+  return (config.value?.providers ?? []).some((provider) => provider.name === name) ? null : name
+})
+
+/**
+ * Every write here goes through `unwrap`, so `{ ok: false }` rejects.
+ *
+ * Unhandled, that was an unhandled rejection plus a control left showing a value
+ * the store never accepted; and when `setSettings` succeeded but the follow-up
+ * `envInfo()` failed there was no feedback at all.
+ */
+async function toggleAutoTitle(enabled: boolean): Promise<void> {
+  try {
+    await env.setOverride({ autoTitle: enabled })
+    ui.notify(enabled ? '已开启自动生成标题' : '已关闭自动生成标题', 'ok')
+  } catch (err) {
+    ui.notifyError(err)
+  }
+}
+
+async function setTitleProvider(event: Event): Promise<void> {
+  const value = (event.target as HTMLSelectElement).value
+  try {
+    await env.setOverride({ titleProvider: value || null })
+    ui.notify('已更新生成标题的渠道', 'ok')
+  } catch (err) {
+    ui.notifyError(err)
+  }
+}
+
+async function setTitleModel(event: Event): Promise<void> {
+  const value = (event.target as HTMLInputElement).value.trim()
+  try {
+    await env.setOverride({ titleModel: value || null })
+    ui.notify('已更新生成标题的模型', 'ok')
+  } catch (err) {
+    ui.notifyError(err)
+  }
+}
 </script>
 
 <template>
@@ -589,6 +641,62 @@ async function reprobe(): Promise<void> {
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- ---------------- session titles ---------------- -->
+    <div class="card">
+      <div class="card-head">
+        历史记录标题
+        <span class="muted" style="font-weight: 400; font-size: 11px">
+          自动调用模型，为每条审查记录生成标题
+        </span>
+      </div>
+      <div class="card-body">
+        <label class="checkbox" style="margin-bottom: 6px">
+          <input
+            type="checkbox"
+            :checked="env.settings?.autoTitle !== false"
+            @change="toggleAutoTitle(($event.target as HTMLInputElement).checked)"
+          />
+          <span>自动生成标题</span>
+        </label>
+        <p class="field-hint" style="margin-bottom: 14px">
+          开启后无需任何操作：每次审查结束会自动为这条记录起名，历史里还没有标题的旧记录也会在左侧列表读到它们时依次补上（一次一条，不会突发请求）。
+          手动重命名过的标题永远不会被自动覆盖；把标题清空即可让它重新自动命名。
+        </p>
+
+        <div class="row">
+          <label class="field">
+            <span class="field-label">生成标题使用的渠道</span>
+            <select :value="env.settings?.titleProvider ?? ''" @change="setTitleProvider($event)">
+              <option value="">
+                跟随 ocr 当前渠道{{ config?.provider ? `（${config.provider}）` : '（未设置）' }}
+              </option>
+              <option v-if="staleTitleProvider" :value="staleTitleProvider">
+                {{ staleTitleProvider }}（已不存在）
+              </option>
+              <option v-for="provider in config?.providers ?? []" :key="provider.name" :value="provider.name">
+                {{ provider.name }}{{ provider.custom ? '（自定义）' : '' }}
+              </option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">模型</span>
+            <input
+              type="text"
+              :value="env.settings?.titleModel ?? ''"
+              :placeholder="`跟随 ocr 当前模型${config?.model ? `（${config.model}）` : '（未设置）'}`"
+              spellcheck="false"
+              @change="setTitleModel($event)"
+            />
+          </label>
+        </div>
+
+        <p class="field-hint">
+          起名是件小事，指定一个便宜的小模型即可。改动这里也会清除之前的失败计数，让没能生成的记录重新尝试。
+        </p>
       </div>
     </div>
   </div>

@@ -23,7 +23,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#101014',
-    title: 'OCR Client',
+    title: 'OcrLens',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       // Hardened defaults: the renderer never touches fs or child_process, it

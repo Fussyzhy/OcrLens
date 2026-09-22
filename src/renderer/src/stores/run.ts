@@ -190,6 +190,8 @@ export const useRunStore = defineStore('run', () => {
       statusText.value = '已完成'
       // Surface the session immediately: the whole point of the panel.
       repos.activeSessionId = result.sessionId
+      // Reloading the list is also what gets the new session named: the store
+      // queues any session it learns about that has no title yet.
       await repos.refreshSessions(dir)
       await results.load(dir, result.sessionId)
       ui.showView('results')

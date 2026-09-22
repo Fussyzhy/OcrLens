@@ -109,6 +109,52 @@ export interface SessionDetail {
 }
 
 /* ------------------------------------------------------------------ *
+ * Client-owned session titles
+ *
+ * ocr has no notion of a session title, so titles are stored by this client
+ * under its own settings directory and joined onto session summaries by id.
+ * ------------------------------------------------------------------ */
+
+/** Where a title came from. A `user` title is never overwritten by the model. */
+export type TitleSource = 'ai' | 'user'
+
+export interface SessionTitle {
+  title: string
+  source: TitleSource
+  /** ISO-8601, when the title was last written. */
+  updatedAt: string
+  /** Model that produced an AI title, kept for transparency. */
+  model?: string
+}
+
+/** A session summary enriched with this client's own metadata. */
+export interface SessionListEntry extends SessionSummary {
+  title?: string
+  titleSource?: TitleSource
+}
+
+/** Result of asking a model to name one session. */
+export interface TitleResult {
+  sessionId: string
+  /** The title in effect afterwards. */
+  title: string
+  model: string
+  /** False when a title the user wrote by hand was preserved instead. */
+  applied: boolean
+}
+
+/**
+ * Result of deleting a session.
+ *
+ * The backing file is moved rather than unlinked, so an accidental deletion
+ * stays recoverable and the user can be told exactly where it went.
+ */
+export interface DeleteSessionResult {
+  sessionId: string
+  trashedTo: string
+}
+
+/* ------------------------------------------------------------------ *
  * `ocr session comments --json`
  * ------------------------------------------------------------------ */
 
@@ -391,6 +437,9 @@ export const IPC = {
   sessionDetail: 'session:detail',
   sessionComments: 'session:comments',
   sessionExportMarkdown: 'session:exportMarkdown',
+  sessionDelete: 'session:delete',
+  titleSet: 'title:set',
+  titleGenerate: 'title:generate',
   gitBranches: 'git:branches',
   gitCommits: 'git:commits',
   previewRun: 'run:preview',
@@ -429,6 +478,12 @@ export interface AppSettings {
   manualRepos: string[]
   /** Repositories the user hid from the sidebar. */
   ignoredRepos: string[]
+  /** Ask the model for a session title after every completed review. */
+  autoTitle: boolean
+  /** Provider used for titling; empty means "whatever ocr is configured with". */
+  titleProvider?: string | null
+  /** Model used for titling; empty means "whatever ocr is configured with". */
+  titleModel?: string | null
 }
 
 export interface ConfigTestResult {

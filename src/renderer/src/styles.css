@@ -170,6 +170,14 @@ textarea {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* `type="search"` makes Chromium render its own clear button inside the field,
+   which would sit underneath `.search-clear` and show two ✕ in the same corner. */
+.search input::-webkit-search-cancel-button,
+.search input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .search::before {
   content: '⌕';
   position: absolute;
@@ -179,6 +187,34 @@ textarea {
   color: var(--text-faint);
   font-size: 14px;
   pointer-events: none;
+}
+
+/* Leave room for the clear button only when it is actually rendered. */
+.search:has(.search-clear) input {
+  padding-right: 26px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.search-clear:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
 }
 
 .tree {
@@ -312,11 +348,6 @@ textarea {
   font-size: 12px;
 }
 
-.session-mode {
-  color: var(--text);
-  font-weight: 500;
-}
-
 .session-findings {
   margin-left: auto;
   font-size: 11px;
@@ -330,6 +361,143 @@ textarea {
 }
 
 .session-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- session titles ---------------- */
+
+.session-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* A session with no title yet shows its mode instead; the italic marks it as a
+   placeholder rather than a name the user chose. */
+.session-name.untitled {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-style: italic;
+}
+
+/* Row actions keep their space so hovering never reflows the list; only the
+   paint is toggled. `:focus-within` is part of that toggle: opacity: 0 does not
+   remove the buttons from the tab order, so without it a keyboard user could
+   focus an invisible ✎/✕ and trigger it with no visible feedback. */
+.session-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+}
+
+.session-row:hover .session-actions,
+.session-row.active .session-actions,
+.session-row.busy .session-actions,
+.session-row:focus-within .session-actions {
+  opacity: 1;
+}
+
+.icon-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+.icon-btn.danger:hover {
+  background: rgba(255, 95, 86, 0.16);
+  color: var(--sev-critical);
+}
+
+/* More specific than the global `input[type='text']` rule. */
+.session-row .rename-input {
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 12px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+}
+
+/* ---------------- search results ---------------- */
+
+.search-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 8px 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.search-hit {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 6px 7px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.search-hit:hover {
+  background: var(--bg-hover);
+}
+
+.search-hit.active {
+  background: var(--accent-soft);
+}
+
+.hit-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.hit-title {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hit-title.untitled {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.hit-meta {
+  display: block;
   font-size: 11px;
   color: var(--text-faint);
   overflow: hidden;
@@ -1168,6 +1336,61 @@ pre.code {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ---------------- modal ---------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal {
+  width: min(420px, calc(100vw - 48px));
+  padding: 18px 20px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+
+.modal h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.modal-message {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.modal-detail {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  max-height: 120px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .toast-host {
