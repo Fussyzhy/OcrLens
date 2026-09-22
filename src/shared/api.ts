@@ -54,6 +54,19 @@ export interface GitCommitView {
 export type Unsubscribe = () => void
 
 export interface OcrApiSurface {
+  /* window chrome (the window is frameless; the renderer draws its own bar) */
+  windowMinimize(): Promise<IpcResult<boolean>>
+  /** Toggles between maximised and restored, resolving to the state it reached. */
+  windowToggleMaximize(): Promise<IpcResult<boolean>>
+  /** Read once on mount: a reload can land in an already maximised window. */
+  windowIsMaximized(): Promise<IpcResult<boolean>>
+  windowClose(): Promise<IpcResult<boolean>>
+  /**
+   * Fires on every maximise and restore, including the ones the OS starts —
+   * a double-click on the drag region, Win+Up, or a snap.
+   */
+  onWindowMaximized(callback: (maximized: boolean) => void): Unsubscribe
+
   /* environment */
   envInfo(): Promise<IpcResult<EnvInfo>>
   refreshEnv(): Promise<IpcResult<EnvInfo>>

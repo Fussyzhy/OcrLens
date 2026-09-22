@@ -33,6 +33,13 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): Unsubscr
 }
 
 const api: OcrApiSurface = {
+  /* window chrome */
+  windowMinimize: () => invoke(IPC.windowMinimize),
+  windowToggleMaximize: () => invoke(IPC.windowToggleMaximize),
+  windowIsMaximized: () => invoke(IPC.windowIsMaximized),
+  windowClose: () => invoke(IPC.windowClose),
+  onWindowMaximized: (callback) => subscribe(IPC.windowMaximized, callback),
+
   /* environment */
   envInfo: () => invoke(IPC.envInfo),
   refreshEnv: () => invoke(IPC.envRefresh),

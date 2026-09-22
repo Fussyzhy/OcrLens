@@ -45,6 +45,10 @@
 
   --ok: #2bde5e;
 
+  /* Shared by the shell grid and the title bar, so the sidebar's column and
+   * its divider line continue up through the window chrome. */
+  --sidebar-width: 288px;
+
   --radius: 8px;
   --radius-lg: 12px;
 
@@ -105,13 +109,84 @@ textarea {
 }
 
 /* ------------------------------------------------------------------ *
+ * Window chrome
+ *
+ * The window is frameless (see main/index.ts), so this bar is the entire
+ * frame: it is the drag region, and its three buttons are the only way to
+ * minimise, maximise or close. The left segment repeats the sidebar's width
+ * and colour, so the sidebar appears to run up through the chrome.
+ * ------------------------------------------------------------------ */
+
+.titlebar {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  flex: none;
+  height: 36px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-soft);
+  /* The whole bar drags the window; the buttons below opt back out. */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar-side {
+  background: var(--bg-side);
+  border-right: 1px solid var(--border);
+}
+
+.titlebar-main {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.window-controls {
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.window-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  /* Caption buttons keep the arrow cursor; a pointer would read as an ordinary
+     web button rather than as window chrome. */
+  cursor: default;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
+}
+
+.window-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Destructive hover, in the same red the rest of the UI reserves for it. */
+.window-btn.close:hover {
+  background: rgba(255, 95, 86, 0.16);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ *
  * App shell
  * ------------------------------------------------------------------ */
 
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .shell {
   display: grid;
-  grid-template-columns: 288px minmax(0, 1fr);
-  height: 100%;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
 }
 
 .pane {

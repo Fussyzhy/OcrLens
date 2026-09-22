@@ -460,7 +460,12 @@ export const IPC = {
   openExternal: 'shell:openExternal',
   openInEditor: 'shell:openInEditor',
   readSnippet: 'fs:snippet',
-  readWholeFile: 'fs:wholeFile'
+  readWholeFile: 'fs:wholeFile',
+  windowMinimize: 'window:minimize',
+  windowToggleMaximize: 'window:toggleMaximize',
+  windowIsMaximized: 'window:isMaximized',
+  windowClose: 'window:close',
+  windowMaximized: 'window:maximized'
 } as const
 
 /**

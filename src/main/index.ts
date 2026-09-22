@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
+import { IPC } from '@shared/types'
 import { ensureEnv } from './env'
 import { cancelAllRuns, registerIpc } from './ipc'
 
@@ -21,6 +22,10 @@ function createWindow(): void {
     minWidth: 1040,
     minHeight: 640,
     show: false,
+    // Frameless: the renderer draws the window's bar (components/TitleBar.vue)
+    // and drives it over the window:* channels. `thickFrame` keeps its default,
+    // so Windows still has the resize border, the shadow and Aero Snap.
+    frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
     // Window and taskbar icon. `resources/` sits beside the built main bundle
@@ -39,6 +44,16 @@ function createWindow(): void {
 
   // Avoid a flash of unstyled content while Vue mounts.
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // The renderer draws the maximise button, so it has to hear about the state
+  // changes it did not cause: a double-click on the drag region, Win+Up, a snap.
+  const reportMaximized = (): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.windowMaximized, mainWindow.isMaximized())
+    }
+  }
+  mainWindow.on('maximize', reportMaximized)
+  mainWindow.on('unmaximize', reportMaximized)
 
   // Any target="_blank" or window.open goes to the OS browser, never a new
   // Electron window with our privileges.

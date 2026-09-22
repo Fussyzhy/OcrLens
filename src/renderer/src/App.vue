@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import Sidebar from './components/Sidebar.vue'
+import TitleBar from './components/TitleBar.vue'
 import ToastHost from './components/ToastHost.vue'
 import NewReviewView from './views/NewReviewView.vue'
 import ResultsView from './views/ResultsView.vue'
@@ -22,14 +23,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="shell">
-    <Sidebar />
-    <main class="pane">
-      <WelcomeView v-if="ui.view === 'welcome'" />
-      <NewReviewView v-else-if="ui.view === 'new-review'" />
-      <ResultsView v-else-if="ui.view === 'results'" />
-      <SettingsView v-else-if="ui.view === 'settings'" />
-    </main>
+  <div class="app">
+    <TitleBar />
+
+    <div class="shell">
+      <Sidebar />
+      <main class="pane">
+        <WelcomeView v-if="ui.view === 'welcome'" />
+        <NewReviewView v-else-if="ui.view === 'new-review'" />
+        <ResultsView v-else-if="ui.view === 'results'" />
+        <SettingsView v-else-if="ui.view === 'settings'" />
+      </main>
+    </div>
   </div>
   <ToastHost />
 </template>

@@ -60,6 +60,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
   }
 
+  /* ---- window chrome ---- */
+
+  // The window is frameless (see createWindow), so these are the only way to
+  // resize or close it. They go through the same wrapper as everything else,
+  // which keeps the "no handler ever rejects" rule intact.
+  handle(IPC.windowMinimize, () => {
+    getWindow()?.minimize()
+    return true
+  })
+
+  handle(IPC.windowToggleMaximize, () => {
+    const win = getWindow()
+    if (!win) return false
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
+    return win.isMaximized()
+  })
+
+  handle(IPC.windowIsMaximized, () => getWindow()?.isMaximized() ?? false)
+
+  handle(IPC.windowClose, () => {
+    getWindow()?.close()
+    return true
+  })
+
   /** Resolves the environment first, so handlers need not care about ordering. */
   const ctx = async (): Promise<OcrContext> => {
     await ensureEnv()
