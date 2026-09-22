@@ -20,14 +20,17 @@ OcrLens（代码审查镜）是 [open-code-review](https://github.com/alibaba/op
 ## 快速开始
 
 ```bash
-npm install          # 安装依赖（会下载 Electron 二进制）
-npm run dev          # 开发模式，带热更新
-npm run build        # 构建到 out/
-npm start            # 预览构建产物
-npm run typecheck    # tsc + vue-tsc 双份类型检查
-npm run smoke        # 端到端自检（见下文）
-npm run probe:ui     # 界面布局自检：截图 + 实测几何（见下文）
+yarn install         # 安装依赖（会下载 Electron 二进制）
+yarn dev             # 开发模式，带热更新
+yarn build           # 构建到 out/
+yarn start           # 预览构建产物
+yarn typecheck       # tsc + vue-tsc 双份类型检查
+yarn smoke           # 端到端自检（见下文）
+yarn probe:ui        # 界面布局自检：截图 + 实测几何（见下文）
 ```
+
+> 本项目的包管理器是 **yarn**，不要用 npm 装依赖：仓库里只保留 `yarn.lock`，
+> `package-lock.json` 已删除并被 `.gitignore` 忽略，避免两份锁文件互相打架。
 
 ## 功能
 
@@ -112,7 +115,7 @@ Git for Windows → C:/Users/admin/Documents/repo → 正常
 
 ```powershell
 Remove-Item Env:\ELECTRON_RUN_AS_NODE
-npm run dev
+yarn dev
 ```
 
 ## 文件位置
@@ -158,8 +161,8 @@ src/
 `scripts/smoke.cjs` 加载**构建产物**并驱动真实窗口，逐个走一遍用户点击路径，抓取 DOM 断言和截图到 `smoke-out/`：
 
 ```bash
-npm run build
-npm run smoke
+yarn build
+yarn smoke
 ```
 
 它会检查：仓库发现 → 点仓库进配置 → 预览待审文件 → 展开会话 → 打开会话 → 按文件分组渲染 finding → 切换筛选 → 导出 Markdown → 设置页诊断。并且**断言点击的仓库就是面板配置的仓库**（`report.violations` 非空时进程退出码为 1），以及整轮运行零 console 错误。
@@ -170,9 +173,9 @@ npm run smoke
 
 ```powershell
 $env:SMOKE_REPO = "C:\path\to\git\repo-with-uncommitted-changes"
-npm run smoke              # 跑一次真实审查，断言自动跳到结果页
+yarn smoke                 # 跑一次真实审查，断言自动跳到结果页
 $env:SMOKE_CANCEL = "1"
-npm run smoke              # 启动后取消，断言状态与无残留进程
+yarn smoke                 # 启动后取消，断言状态与无残留进程
 ```
 
 标题 / 搜索 / 删除这一段会**写入**（给仓库里每一条还没有标题的会话生成标题，再改名一条、把一条移进回收站），所以它不跟着 `SMOKE_REPO` 自动跑，而是要单独显式打开：
@@ -181,7 +184,7 @@ npm run smoke              # 启动后取消，断言状态与无残留进程
 $env:SMOKE_REPO = "<一个用完即弃的临时仓库>"
 $env:SMOKE_MUTATE = "1"        # 不加这个就跳过改名/删除/补标题那一段
 $env:SMOKE_ISOLATE = "1"
-npm run smoke
+yarn smoke
 ```
 
 自动命名要一条条排队调模型，预算默认 90 次 × 2s；网关慢时用 `SMOKE_TITLE_POLL` 放宽，脚本会在超预算时把「可能是网关慢」一并写进失败信息（而不是直接判成应用缺陷）。
@@ -192,7 +195,7 @@ npm run smoke
 
 ### 界面自检
 
-`npm run probe:ui`（`scripts/probe-ui.cjs`）与 smoke 互补：**只管布局与渲染，不管行为**，所以改 CSS 时
+`yarn probe:ui`（`scripts/probe-ui.cjs`）与 smoke 互补：**只管布局与渲染，不管行为**，所以改 CSS 时
 可以反复跑。它以 1440×920 启动，截首页；最大化后再截首页、审查配置页、展开会话的侧栏、结果页；
 最后缩到最小窗口 1040×760 再截一张。除截图外还把**实测几何**写进 `smoke-out/probe.json`：面板宽度、
 正文宽度、吸顶标题与正文的左缩进是否一致、会话行间距、折叠箭头的字形宽度、底部图标的命中框、
@@ -226,10 +229,10 @@ finding 的分栏、审查卡片是否真的并排在同一个 `y` 上。
 
 **界面这一轮（布局与动效）**同样在 `SMOKE_ISOLATE=1` 下跑，两项都 exit 0：
 
-- `npm run smoke`：18 个阶段全过、0 violation、0 console 错误、0 外部输入。加包装层
+- `yarn smoke`：18 个阶段全过、0 violation、0 console 错误、0 外部输入。加包装层
   （`.findings-grid` / `.review-grid`）、把折叠箭头从 `▶` 字形换成 CSS 画的两条边框、给侧栏底栏
   加 `foot-icon` 命中框之后，侧栏点选、结果页渲染、筛选联动、导出 Markdown 与设置页读写均无回归。
-- `npm run probe:ui`：默认窗口 1440×920、最大化（1920×1032）、最小窗口 1040×760 各截图并实测几何。
+- `yarn probe:ui`：默认窗口 1440×920、最大化（1920×1032）、最小窗口 1040×760 各截图并实测几何。
   关键读数：面板从 1152 到 1632px 时正文同步到 1632（旧实现固定 1180px 上限），吸顶标题左缩进
   30.72px 与正文完全一致；会话行间距 4px；折叠箭头的字形宽度 5px；底栏两个图标命中框 34×30、
   字号 16px；结果页只有一个文件组时该卡片占满整行；审查页「参数」与「待审文件预览」的 `y` 相同

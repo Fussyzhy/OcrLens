@@ -10,7 +10,7 @@
  * made it onto the screen.
  *
  * Usage:
- *   npm run build
+ *   yarn build
  *   node_modules\.bin\electron scripts\smoke.cjs
  *
  * Environment:

@@ -12,7 +12,7 @@
  * structure for each step. See the last entry of「验证情况」in README.md.
  *
  * Usage:
- *   npm run build
+ *   yarn build
  *   node_modules\.bin\electron scripts\probe-sidebar.cjs
  *   # results in smoke-out/probe.log
  *

@@ -12,11 +12,11 @@
     "postinstall": "install-electron",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "typecheck": "yarn typecheck:node && yarn typecheck:web",
     "smoke:check": "node --check scripts/smoke.cjs",
-    "smoke": "npm run smoke:check && electron scripts/smoke.cjs",
+    "smoke": "yarn smoke:check && electron scripts/smoke.cjs",
     "probe:check": "node --check scripts/probe-ui.cjs",
-    "probe:ui": "npm run probe:check && electron scripts/probe-ui.cjs"
+    "probe:ui": "yarn probe:check && electron scripts/probe-ui.cjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

@@ -12,3 +12,6 @@ release/
 # Smoke-test artifacts (scripts/smoke.cjs)
 smoke-out/
 smoke-stdout.txt
+
+# yarn is the package manager for this project; npm's lockfile must not come back
+package-lock.json
