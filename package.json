@@ -1,0 +1,30 @@
+{
+  "name": "ocr-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Visual desktop client for the open-code-review (ocr) CLI",
+  "main": "./out/main/index.js",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "postinstall": "install-electron",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "smoke": "electron scripts/smoke.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/devtools-api": "^8.1.5",
+    "electron": "^44.4.3",
+    "electron-vite": "^5.0.0",
+    "pinia": "^4.0.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vue": "^3.5.43",
+    "vue-tsc": "^3.3.11"
+  }
+}

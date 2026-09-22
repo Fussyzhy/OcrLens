@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+release/
+*.log
+.DS_Store
+.vite/
+
+# tsc incremental build info (composite projects)
+*.tsbuildinfo
+
+# Smoke-test artifacts (scripts/smoke.cjs)
+smoke-out/
+smoke-stdout.txt
