@@ -22,7 +22,10 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#101014',
+    backgroundColor: '#000000',
+    // Window and taskbar icon. `resources/` sits beside the built main bundle
+    // in development; a packaged build would have to copy it in explicitly.
+    icon: path.join(__dirname, '../../resources/icon.png'),
     title: 'OcrLens',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

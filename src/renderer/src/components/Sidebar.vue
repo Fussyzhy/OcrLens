@@ -6,6 +6,7 @@ import { useRepoStore } from '../stores/repos'
 import { useUiStore } from '../stores/ui'
 import { formatRelative, modeLabel, stateLabel } from '../utils/format'
 import ConfirmDialog from './ConfirmDialog.vue'
+import logoUrl from '../assets/ocrlens-logo.png'
 
 const env = useEnvStore()
 const repos = useRepoStore()
@@ -127,7 +128,7 @@ watch(
   <aside class="sidebar">
     <div class="sidebar-head">
       <div class="brand">
-        <span class="brand-dot" />
+        <img class="brand-mark" :src="logoUrl" alt="" width="26" height="26" />
         <span>OcrLens</span>
         <span v-if="env.info?.ocrVersion" class="brand-version">v{{ env.info.ocrVersion }}</span>
       </div>

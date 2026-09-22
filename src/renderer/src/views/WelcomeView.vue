@@ -2,6 +2,7 @@
 import { useEnvStore } from '../stores/env'
 import { useRepoStore } from '../stores/repos'
 import { useUiStore } from '../stores/ui'
+import logoUrl from '../assets/ocrlens-logo.png'
 
 const env = useEnvStore()
 const repos = useRepoStore()
@@ -10,6 +11,7 @@ const ui = useUiStore()
 
 <template>
   <div class="view-body" style="max-width: 760px; padding-top: 64px">
+    <img class="welcome-mark" :src="logoUrl" alt="OcrLens" width="64" height="64" />
     <h1 style="margin: 0 0 6px; font-size: 20px">OcrLens</h1>
     <p class="muted" style="margin: 0 0 24px">
       已安装的 open-code-review CLI 的可视化外壳。点击左栏任意仓库即可配置并启动审查。

@@ -1,5 +1,7 @@
 # OcrLens
 
+<img src="resources/icon.png" alt="OcrLens logo" width="88">
+
 OcrLens（代码审查镜）是 [open-code-review](https://github.com/alibaba/open-code-review)（`ocr`）命令行工具的桌面可视化外壳。
 
 它**不内置也不捆绑 `ocr`**——CLI 仍然由你自己 `npm install -g` 安装和升级，这个客户端只做两件事：
