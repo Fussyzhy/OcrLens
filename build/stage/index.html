@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>OcrLens promo stage</title>
+    <style>
+      /* The stage draws to a canvas. Nothing here uses CSS transitions or CSS
+         animations on purpose: every pixel is produced by frame(f) off a virtual
+         clock, so a frame can never be captured mid-transition and the output can
+         never drift from the timeline.
+
+         The canvas is sized in device pixels by stageInstall(): its backing store
+         is STAGE_W x STAGE_H times the supersample factor, and everything is drawn
+         through a matching transform. The video therefore comes from native
+         pixels, not from a magnified 1x raster. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #050807;
+      }
+      #stage {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <script src="./stage.js"></script>
+  </body>
+</html>

@@ -19,7 +19,10 @@
     "probe:ui": "yarn probe:check && electron scripts/probe-ui.cjs",
     "probe:rails": "yarn probe:check && electron scripts/probe-rails.cjs",
     "video:check": "node --check scripts/make-video.cjs",
-    "video": "yarn build && yarn video:check && electron scripts/make-video.cjs"
+    "video": "yarn build && yarn video:check && electron scripts/make-video.cjs",
+    "promo:check": "node --check scripts/make-promo.cjs && node --check build/stage/stage.js",
+    "promo": "yarn promo:check && electron scripts/make-promo.cjs",
+    "promo:diag": "yarn promo:check && electron scripts/make-promo.cjs --diag"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
