@@ -1114,6 +1114,7 @@ textarea {
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
   transition: border-color 0.2s ease;
+  width: 100%;
 }
 
 .card:hover {
@@ -2540,10 +2541,9 @@ pre.code {
 /* Recent history beside the getting-started notes on wide windows, stacked on
  * narrow ones. */
 .home-cols {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
   gap: 18px;
-  align-items: start;
+  align-items: center;
 }
 
 .home-list {

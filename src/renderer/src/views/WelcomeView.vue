@@ -202,7 +202,7 @@ const gitNote = computed(() => {
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" v-if="false">
         <div class="card-head">开始一次审查</div>
         <div class="card-body">
           <ol class="steps">
