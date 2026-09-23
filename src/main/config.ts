@@ -7,8 +7,12 @@ import type {
   LlmProtocol,
   MutateResultView,
   OcrConfigView,
-  ProviderInfo
+  ProviderInfo,
+  ProviderModelsRequest,
+  ProviderSaveRequest,
+  ProviderSaveResult
 } from '@shared/types'
+import { isValidConfigKey } from '@shared/config-key'
 import { execOcr, ocrConfigPath, ocrStateDir, type OcrLaunch } from './ocr'
 
 /**
@@ -41,6 +45,20 @@ interface RawOcrConfig {
   custom_providers?: Record<string, RawProviderEntry>
   llm?: { language?: string; [key: string]: unknown }
   [key: string]: unknown
+}
+
+/**
+ * The stored entry for one channel.
+ *
+ * A name can exist in both tables (a hand-edited `config.json`, or a custom channel
+ * created under a built-in's name), so exactly one rule decides which entry wins:
+ * `custom_providers` does. `readConfigView`, `resolveLlmTarget` and
+ * `resolveProviderTarget` all resolve a channel through here — when they disagreed,
+ * the settings page could show one address while the model list was fetched from
+ * another.
+ */
+function findProviderEntry(config: RawOcrConfig, name: string): RawProviderEntry {
+  return config.custom_providers?.[name] ?? config.providers?.[name] ?? {}
 }
 
 /** Reads and parses the config file, tolerating absence and corruption. */
@@ -169,8 +187,7 @@ export async function readConfigView(
   // is what is actually in effect. Showing the top-level key alone made the
   // settings page keep displaying the previous model after a switch while
   // reviews and titles already used the new one.
-  const activeEntry: RawProviderEntry =
-    config.custom_providers?.[activeProvider] ?? config.providers?.[activeProvider] ?? {}
+  const activeEntry: RawProviderEntry = findProviderEntry(config, activeProvider)
   const activeModel = (activeEntry.model || config.model || '').trim()
 
   const providers: ProviderInfo[] = []
@@ -224,12 +241,17 @@ export async function readConfigView(
   }
 }
 
-/** Everything needed to call the configured model directly. */
-export interface ResolvedLlmTarget {
+/** Everything needed to call a channel, without naming a model. */
+export interface ProviderTarget {
   provider: string
-  protocol: LlmProtocol
+  protocol: string
   url: string
   apiKey: string
+}
+
+/** Everything needed to call the configured model directly. */
+export interface ResolvedLlmTarget extends ProviderTarget {
+  protocol: LlmProtocol
   model: string
 }
 
@@ -256,25 +278,9 @@ export async function resolveLlmTarget(
     throw new Error('ocr 配置里没有指定渠道，无法生成标题。')
   }
 
-  const entry: RawProviderEntry =
-    config.custom_providers?.[provider] ?? config.providers?.[provider] ?? {}
+  const target = await resolveProviderTarget(launch, gitBinDir, { name: provider, custom: false })
 
-  let url = entry.url?.trim() ?? ''
-  // The protocol comes from a hand-editable JSON file, so it is an arbitrary
-  // string at this point; `?? undefined` here was a no-op that made it look
-  // validated when it was not.
-  let protocol = entry.protocol?.trim() || undefined
-
-  // Built-in providers keep their base URL and protocol inside the CLI, not in
-  // config.json, so fall back to the catalogue only when the file is silent.
-  if ((!url || !protocol) && launch) {
-    const view = await readConfigView(launch, gitBinDir)
-    const info = view.providers.find((p) => p.name === provider)
-    url = url || info?.url || ''
-    protocol = protocol ?? (info?.protocol as LlmProtocol | undefined)
-  }
-
-  const resolved = (protocol ?? 'openai').trim()
+  const resolved = target.protocol.trim()
   if (!SUPPORTED_PROTOCOLS.has(resolved)) {
     throw new Error(
       `渠道 ${provider} 的协议「${resolved}」本客户端不支持，无法生成标题（支持：` +
@@ -282,14 +288,17 @@ export async function resolveLlmTarget(
     )
   }
 
+  // `ocr config set model X` writes X into the channel's own entry, which takes
+  // precedence over the top-level key — the same order the CLI itself uses.
+  const entry = findProviderEntry(config, provider)
   const model = (entry.model || config.model || '').trim()
   if (!model) throw new Error('没有可用的模型名，无法生成标题。')
 
   return {
     provider,
     protocol: resolved as LlmProtocol,
-    url,
-    apiKey: entry.api_key?.trim() ?? '',
+    url: target.url,
+    apiKey: target.apiKey,
     model
   }
 }
@@ -382,31 +391,88 @@ export async function restoreBackup(backupPath: string): Promise<{ ok: boolean; 
 export type MutateResult = MutateResultView
 
 /**
- * Sets one config key via the CLI.
- *
- * `key` is validated against a conservative pattern so a caller cannot smuggle
- * extra CLI flags through it.
+ * One key of a batch write. A missing `value` means "unset this key", which the
+ * CLI only accepts for whole entries (`custom_providers.<name>`,
+ * `mcp_servers.<name>`, `provider`, `max_tokens`, `effort`) — an individual
+ * dotted key is rejected, so clearing one field is done by writing an empty
+ * string instead.
  */
+export interface ConfigWrite {
+  key: string
+  value?: string
+}
+
+/**
+ * Writes several config keys as a single operation.
+ *
+ * Two decisions worth stating:
+ *
+ * 1. **One backup for the whole batch.** Saving a channel touches four or five
+ *    keys, and a snapshot per key buried the (user-visible) backups list under
+ *    files that differ only in the millisecond of their name.
+ * 2. **The first failure stops the batch** and is reported with the keys that
+ *    succeeded. A half-written channel is then visible as such instead of being
+ *    quietly completed with the values it already had.
+ *
+ * Keys are validated with the shared pattern so a caller cannot smuggle extra CLI
+ * flags through them.
+ */
+export async function configSetMany(
+  launch: OcrLaunch | null,
+  gitBinDir: string | null,
+  writes: ConfigWrite[]
+): Promise<ProviderSaveResult> {
+  if (!launch) return { ok: false, keys: [], output: '', error: 'ocr CLI not available' }
+
+  for (const write of writes) {
+    if (!isValidConfigKey(write.key)) {
+      return { ok: false, keys: [], output: '', error: `Invalid config key: ${write.key}` }
+    }
+  }
+
+  const backupPath = await backupConfig()
+  const done: string[] = []
+  let output = ''
+
+  for (const write of writes) {
+    const args =
+      write.value === undefined
+        ? ['config', 'unset', write.key]
+        : ['config', 'set', write.key, write.value]
+
+    const result = await execOcr(launch, args, gitBinDir, { timeoutMs: 30_000 })
+    const chunk = (result.stdout + result.stderr).trim()
+    if (chunk) output = output ? `${output}\n${chunk}` : chunk
+
+    if (result.code !== 0) {
+      // The keys before this one did land, so the config has changed: keeping the
+      // catalogue cache would let the page (just reloaded) and the title generator
+      // resolve the same channel from different values for up to a minute.
+      if (done.length) invalidateBuiltinProviders()
+      return {
+        ok: false,
+        keys: done,
+        output,
+        backupPath,
+        error: chunk || `ocr ${args.join(' ')} exited ${result.code}`
+      }
+    }
+    done.push(write.key)
+  }
+
+  invalidateBuiltinProviders()
+  return { ok: true, keys: done, output, backupPath }
+}
+
+/** Sets one config key via the CLI. */
 export async function configSet(
   launch: OcrLaunch | null,
   gitBinDir: string | null,
   key: string,
   value: string
 ): Promise<MutateResult> {
-  if (!launch) return { ok: false, output: '', error: 'ocr CLI not available' }
-  if (!/^[A-Za-z0-9_.-]+$/.test(key)) {
-    return { ok: false, output: '', error: `Invalid config key: ${key}` }
-  }
-
-  const backupPath = await backupConfig()
-  const result = await execOcr(launch, ['config', 'set', key, value], gitBinDir, { timeoutMs: 30_000 })
-  const output = (result.stdout + result.stderr).trim()
-
-  if (result.code !== 0) {
-    return { ok: false, output, backupPath, error: output || `ocr config set exited ${result.code}` }
-  }
-  invalidateBuiltinProviders()
-  return { ok: true, output, backupPath }
+  const result = await configSetMany(launch, gitBinDir, [{ key, value }])
+  return { ok: result.ok, output: result.output, backupPath: result.backupPath, error: result.error }
 }
 
 export async function configUnset(
@@ -414,20 +480,83 @@ export async function configUnset(
   gitBinDir: string | null,
   key: string
 ): Promise<MutateResult> {
-  if (!launch) return { ok: false, output: '', error: 'ocr CLI not available' }
-  if (!/^[A-Za-z0-9_.-]+$/.test(key)) {
-    return { ok: false, output: '', error: `Invalid config key: ${key}` }
+  const result = await configSetMany(launch, gitBinDir, [{ key }])
+  return { ok: result.ok, output: result.output, backupPath: result.backupPath, error: result.error }
+}
+
+/**
+ * Writes a channel the settings form has just assembled.
+ *
+ * The name is the config key and is never rewritten: every other key of the
+ * entry lives under it, so "renaming" a channel would leave the old one behind
+ * as an orphan. An empty `apiKey` is skipped rather than stored, which is what
+ * lets the edit form show a masked key and mean "leave it alone".
+ *
+ * An emptied model list is written as an empty string, because `ocr config set`
+ * treats that as "remove the key" — verified against the CLI, which then reports
+ * the channel with no catalogue instead of a catalogue holding one empty name.
+ */
+export async function saveProvider(
+  launch: OcrLaunch | null,
+  gitBinDir: string | null,
+  request: ProviderSaveRequest
+): Promise<ProviderSaveResult> {
+  const name = request.name.trim()
+  if (!isValidConfigKey(name)) {
+    return {
+      ok: false,
+      keys: [],
+      output: '',
+      error: `渠道名只能包含字母、数字、下划线、点和连字符：${request.name}`
+    }
   }
 
-  const backupPath = await backupConfig()
-  const result = await execOcr(launch, ['config', 'unset', key], gitBinDir, { timeoutMs: 30_000 })
-  const output = (result.stdout + result.stderr).trim()
+  const prefix = `${request.custom ? 'custom_providers' : 'providers'}.${name}`
+  const models = request.models.map((model) => model.trim()).filter(Boolean)
 
-  if (result.code !== 0) {
-    return { ok: false, output, backupPath, error: output || `ocr config unset exited ${result.code}` }
+  const writes: ConfigWrite[] = [
+    { key: `${prefix}.url`, value: request.url.trim() },
+    { key: `${prefix}.protocol`, value: request.protocol.trim() },
+    { key: `${prefix}.models`, value: models.join(',') }
+  ]
+
+  if (request.apiKey?.trim()) writes.push({ key: `${prefix}.api_key`, value: request.apiKey.trim() })
+
+  return configSetMany(launch, gitBinDir, writes)
+}
+
+/**
+ * Resolves one channel's connection details, allowing the settings form to
+ * override what is stored.
+ *
+ * Editing happens before the new URL or key is written, so the form's values have
+ * to win — but only when the form actually has them: a key field left untouched
+ * must fall back to the stored key, which is the one secret the renderer never
+ * receives. Built-in channels keep their base URL inside the CLI, so that is the
+ * last fallback.
+ */
+export async function resolveProviderTarget(
+  launch: OcrLaunch | null,
+  gitBinDir: string | null,
+  request: ProviderModelsRequest
+): Promise<ProviderTarget> {
+  const { config } = readRawConfig()
+  const entry = findProviderEntry(config, request.name)
+
+  let url = (request.url ?? '').trim() || entry.url?.trim() || ''
+  let protocol = (request.protocol ?? '').trim() || entry.protocol?.trim() || ''
+  const apiKey = (request.apiKey ?? '').trim() || entry.api_key?.trim() || ''
+
+  if ((!url || !protocol) && launch) {
+    const catalogue = await builtinProviders(launch, gitBinDir)
+    const info = catalogue.find((provider) => provider.name === request.name)
+    url = url || info?.url || ''
+    protocol = protocol || info?.protocol || ''
   }
-  invalidateBuiltinProviders()
-  return { ok: true, output, backupPath }
+
+  if (!protocol) protocol = 'openai'
+
+  return { provider: request.name, url, protocol, apiKey }
 }
 
 /** Runs `ocr llm test` to verify the active provider/model actually responds. */

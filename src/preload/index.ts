@@ -47,7 +47,11 @@ const api: OcrApiSurface = {
   /* repositories */
   listRepos: () => invoke(IPC.repoList),
   addRepo: (dir: string) => invoke(IPC.repoAdd, dir),
-  removeRepo: (dir: string) => invoke(IPC.repoRemove, dir),
+  /** Renames a repository in the rail; an empty name restores the folder name. */
+  renameRepo: (dir: string, name: string | null) => invoke(IPC.repoRename, dir, name),
+  /** Moves the repository's whole history to the client trash, then hides it. */
+  deleteRepo: (dir: string) => invoke(IPC.repoDelete, dir),
+  reorderRepos: (dirs: string[]) => invoke(IPC.repoReorder, dirs),
   pickRepo: () => invoke(IPC.repoPick),
 
   /* sessions */
@@ -59,6 +63,8 @@ const api: OcrApiSurface = {
   exportSessionMarkdown: (request) => invoke(IPC.sessionExportMarkdown, request),
   deleteSession: (repoDir: string, sessionId: string) =>
     invoke(IPC.sessionDelete, repoDir, sessionId),
+  reorderSessions: (repoDir: string, sessionIds: string[]) =>
+    invoke(IPC.sessionReorder, repoDir, sessionIds),
 
   /* session titles */
   setSessionTitle: (sessionId: string, title: string) => invoke(IPC.titleSet, sessionId, title),
@@ -82,6 +88,8 @@ const api: OcrApiSurface = {
   setConfig: (key: string, value: string) => invoke(IPC.configSet, key, value),
   unsetConfig: (key: string) => invoke(IPC.configUnset, key),
   testConfig: () => invoke(IPC.configTest),
+  saveProvider: (request) => invoke(IPC.configProviderSave, request),
+  fetchProviderModels: (request) => invoke(IPC.configProviderModels, request),
   listBackups: () => invoke(IPC.configBackups),
   restoreBackup: (backupPath: string) => invoke(IPC.configRestore, backupPath),
 

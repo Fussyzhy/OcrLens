@@ -737,7 +737,8 @@ textarea {
 }
 
 /* More specific than the global `input[type='text']` rule. */
-.session-row .rename-input {
+.session-row .rename-input,
+.repo-rename {
   width: 100%;
   padding: 2px 6px;
   font-size: 12px;
@@ -745,6 +746,114 @@ textarea {
   border: 1px solid var(--accent);
   border-radius: 4px;
   outline: none;
+}
+
+/* Sits between the chevron and the row count, so it takes the space the name
+   would have had rather than stretching the row. */
+.repo-rename {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+/* ---------------- rail: rename, delete and drag ordering ---------------- */
+
+/* The whole row is the drag handle, so it says so. Clicking still opens the
+   repository / session; only a real drag reorders. */
+.repo-row,
+.session-row {
+  cursor: grab;
+}
+
+.repo-row:active,
+.session-row:active,
+.repo.dragging .repo-row,
+.session-row.dragging {
+  cursor: grabbing;
+}
+
+/* A row being dragged fades out, so its empty slot reads as "this moved". */
+.repo.dragging .repo-row,
+.session-row.dragging {
+  opacity: 0.45;
+}
+
+/* Where the drop will land. Repositories use the two pseudo-elements (their
+   rows have no other use for them); a session row already draws its active mark
+   with `::before`, so it shows the same line as an inset shadow instead. */
+.repo {
+  position: relative;
+}
+
+.repo.drop-above::before,
+.repo.drop-below::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+
+.repo.drop-above::before {
+  top: -2px;
+}
+
+.repo.drop-below::after {
+  bottom: -2px;
+}
+
+.session-row.drop-above {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.session-row.drop-below {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* Row actions keep their space so hovering never reflows the list; only the
+   paint is toggled. `:focus-within` is part of that toggle: opacity: 0 does not
+   remove the buttons from the tab order, so without it a keyboard user could
+   focus an invisible ✎/✕ and trigger it with no visible feedback. */
+.repo-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.repo-row:hover .repo-actions,
+.repo-row.active .repo-actions,
+.repo-row:focus-within .repo-actions {
+  opacity: 1;
+}
+
+/* A hidden count is worth a click, not a scroll: the button names how many rows
+   it adds, and turns into a plain "收起" once they are all on screen. */
+.sessions-more {
+  align-self: flex-start;
+  margin: 2px 0 2px 2px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    border-color 0.14s ease,
+    background 0.14s ease;
+}
+
+.sessions-more:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--bg-elev-2);
 }
 
 /* ---------------- search results ---------------- */
@@ -1654,38 +1763,92 @@ pre.code {
   border-radius: 3px;
 }
 
-.model-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+/* ---------------- channel editor ---------------- */
+
+/* The fetched catalogue is a scrollable grid: a gateway can serve a hundred
+   models and the form must not grow past the viewport for them. */
+.models-grid {
+  max-height: 216px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(186px, 1fr));
+  gap: 2px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
 }
 
-.model-chip {
-  padding: 2px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-elev);
-  color: var(--text-dim);
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: 5px;
   font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 11.5px;
+  color: var(--text-dim);
   cursor: pointer;
 }
 
-.model-chip:hover:not(:disabled) {
-  border-color: var(--text-faint);
+.model-option:hover {
+  background: var(--bg-hover);
   color: var(--text);
 }
 
-.model-chip.current {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-bright);
+.model-option input {
+  flex: 0 0 auto;
+  accent-color: var(--accent);
 }
 
-.model-chip:disabled {
-  opacity: 0.5;
-  cursor: default;
+.model-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Distinguishes "nothing fetched yet" from "fetched something empty-handed",
+   which are different problems with different fixes. */
+.models-note {
+  padding: 7px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* A failed fetch states a problem, not a state of the form, so it reads as one:
+   solid edge, normal text colour, and it stays on screen even when a previously
+   fetched catalogue is already listed below. */
+.models-note-error {
+  border-style: solid;
+  border-color: #7a2f2f;
+  background: rgba(122, 47, 47, 0.16);
+  color: var(--text);
+}
+
+.models-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.models-picked {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The editor is a full-width child: of the row it edits, or of the `<details>`
+   that creates a channel. */
+.channel-edit {
+  flex-basis: 100%;
+  margin-top: 4px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
 }
 
 .channel-list {
@@ -1775,11 +1938,11 @@ pre.code {
   gap: 6px;
 }
 
-/* The key editor is a full-width child of the row it edits. */
-.channel-key {
-  flex-basis: 100%;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-soft);
+/* A row whose editor is open: never dimmed, even in the idle catalogue, and
+   marked so it stays obvious which channel the form below it belongs to. */
+.channel-row.editing {
+  opacity: 1;
+  border-color: var(--border);
 }
 
 /* ------------------------------------------------------------------ *

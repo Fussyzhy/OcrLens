@@ -4,6 +4,8 @@ import {
   IPC,
   type CommentFilter,
   type ExportMarkdownRequest,
+  type ProviderModelsRequest,
+  type ProviderSaveRequest,
   type ReviewOptions,
   type RunLogLine,
   type RunProgress,
@@ -14,15 +16,19 @@ import {
   configUnset,
   listBackups,
   readConfigView,
+  resolveProviderTarget,
   restoreBackup,
+  saveProvider,
   testConnection
 } from './config'
 import { envInfo, ensureEnv, gitPath, ocrContext, refreshEnv, tryOcrContext, type OcrContext } from './env'
 import { exportMarkdown } from './exporter'
 import { listBranches, listCommits } from './git'
-import { addRepo, listRepos, removeRepo } from './repos'
+import { forgetRepo, setRepoOrder, setSessionOrder } from './layout'
+import { fetchProviderModels, modelListEndpoint } from './models'
+import { addRepo, listRepos, removeRepo, renameRepo } from './repos'
 import { previewRun, startRun, type RunHandle } from './runner'
-import { deleteSession, listSessions, sessionComments, sessionDetail } from './sessions'
+import { deleteSession, listSessions, sessionComments, sessionDetail, trashRepoSessions } from './sessions'
 import { readSettings, writeSettings } from './settings'
 import { readSnippet, readWholeFile } from './source'
 import { generateTitle } from './titler'
@@ -106,10 +112,29 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return result.repo ?? null
   })
 
-  handle(IPC.repoRemove, async (dir: string) => {
+  /** Renames a repository in the rail only; the folder on disk is untouched. */
+  handle(IPC.repoRename, async (dir: string, name: string | null) => renameRepo(dir, name))
+
+  /**
+   * Deletes a repository: its whole history moves to the client trash, then the
+   * repository is ignored so the rail stops listing it.
+   *
+   * Only a failure to read the session store as a whole (which throws) leaves the
+   * repository visible with its history intact — the alternative would hide a
+   * repository whose sessions are still on disk and reachable only by hand.
+   * Individual records that cannot be read, and files that cannot be moved, are
+   * skipped, counted in the result and reported to the user: those files do stay
+   * behind while the repository disappears from the rail, and saying so is the only
+   * honest outcome. The result is returned as-is for that reason.
+   */
+  handle(IPC.repoDelete, async (dir: string) => {
+    const result = await trashRepoSessions(dir)
     removeRepo(dir)
-    return true
+    forgetRepo(dir)
+    return result
   })
+
+  handle(IPC.repoReorder, async (dirs: string[]) => setRepoOrder(dirs))
 
   handle(IPC.repoPick, async () => {
     const win = getWindow()
@@ -152,6 +177,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle(IPC.sessionDelete, async (repoDir: string, sessionId: string) =>
     deleteSession(repoDir, sessionId)
+  )
+
+  /** Stores the order the user dragged one repository's sessions into. */
+  handle(IPC.sessionReorder, async (repoDir: string, sessionIds: string[]) =>
+    setSessionOrder(repoDir, sessionIds)
   )
 
   /* ---------------- session titles ---------------- */
@@ -256,6 +286,39 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     await ensureEnv()
     const context = tryOcrContext()
     return testConnection(context?.launch ?? null, context?.gitBinDir ?? null)
+  })
+
+  /**
+   * Saves a whole channel at once.
+   *
+   * One call rather than four `configSet`s from the renderer: the batch takes a
+   * single backup, and a failure part-way through is reported with the keys that
+   * did land instead of leaving the form to guess.
+   */
+  handle(IPC.configProviderSave, async (request: ProviderSaveRequest) => {
+    await ensureEnv()
+    const context = tryOcrContext()
+    return saveProvider(context?.launch ?? null, context?.gitBinDir ?? null, request)
+  })
+
+  /** Asks a channel's gateway which models it serves, for the picker. */
+  handle(IPC.configProviderModels, async (request: ProviderModelsRequest) => {
+    await ensureEnv()
+    const context = tryOcrContext()
+    const target = await resolveProviderTarget(
+      context?.launch ?? null,
+      context?.gitBinDir ?? null,
+      request
+    )
+
+    const models = await fetchProviderModels({
+      provider: target.provider,
+      url: target.url,
+      protocol: target.protocol,
+      apiKey: target.apiKey
+    })
+
+    return { models, endpoint: modelListEndpoint({ protocol: target.protocol, url: target.url }) }
   })
 
   handle(IPC.configBackups, async () => listBackups())

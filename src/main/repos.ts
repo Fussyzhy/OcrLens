@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { RepoEntry } from '@shared/types'
 import { gitPath, ocrContext } from './env'
 import { isGitRepo } from './git'
+import { applyRepoLayout, setRepoAlias } from './layout'
 import { ocrSessionsDir } from './ocr'
 import { readSettings, writeSettings } from './settings'
 
@@ -207,13 +208,26 @@ export async function listRepos(): Promise<RepoEntry[]> {
     })
   }
 
-  return [...byDir.values()].sort((a, b) => {
-    // Most recently active first; repos with no history fall to the bottom.
-    const at = a.lastActivity ? Date.parse(a.lastActivity) : 0
-    const bt = b.lastActivity ? Date.parse(b.lastActivity) : 0
-    if (at !== bt) return bt - at
-    return a.name.localeCompare(b.name)
-  })
+  return applyRepoLayout(
+    [...byDir.values()].sort((a, b) => {
+      // Most recently active first; repos with no history fall to the bottom.
+      const at = a.lastActivity ? Date.parse(a.lastActivity) : 0
+      const bt = b.lastActivity ? Date.parse(b.lastActivity) : 0
+      if (at !== bt) return bt - at
+      return a.name.localeCompare(b.name)
+    })
+  )
+}
+
+/**
+ * Sets a repository's display name.
+ *
+ * The folder on disk is never touched — the name is this client's own label, so
+ * renaming a repository in the rail cannot break the paths stored in its
+ * sessions. An empty name restores the folder name.
+ */
+export function renameRepo(dir: string, name: string | null): string | null {
+  return setRepoAlias(dir, name)
 }
 
 /** Validates and pins a repository the user picked. */

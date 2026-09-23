@@ -129,12 +129,30 @@ export function setTitle(
   return { applied: true }
 }
 
-/** Drops a title, e.g. when the user clears a name field. */
-export function removeTitle(sessionId: string): void {
+/**
+ * Drops several titles with a single write.
+ *
+ * `persist` rewrites the whole file, and the repository delete removes one title
+ * per session — so deleting a repository with a long history rewrote the file once
+ * per session, synchronously, on the main process. One write for the batch.
+ */
+export function removeTitles(sessionIds: string[]): void {
   const map = { ...load() }
-  if (!(sessionId in map)) return
-  delete map[sessionId]
+  let changed = false
+
+  for (const sessionId of sessionIds) {
+    if (!(sessionId in map)) continue
+    delete map[sessionId]
+    changed = true
+  }
+
+  if (!changed) return
   persist(map)
   cache = map
+}
+
+/** Drops a title, e.g. when the user clears a name field. */
+export function removeTitle(sessionId: string): void {
+  removeTitles([sessionId])
 }
 

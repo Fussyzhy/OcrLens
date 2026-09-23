@@ -154,6 +154,20 @@ export interface DeleteSessionResult {
   trashedTo: string
 }
 
+/**
+ * Result of deleting a repository.
+ *
+ * Deleting a repository is really "move its whole history to the trash and stop
+ * showing it", so the count and the destination are the parts worth reporting.
+ * `skipped` lists records that could not be read: they are left on disk on
+ * purpose, and the user is told rather than being shown a tidy success.
+ */
+export interface RepoDeleteResult {
+  trashed: number
+  skipped: string[]
+  trashDir: string
+}
+
 /* ------------------------------------------------------------------ *
  * `ocr session comments --json`
  * ------------------------------------------------------------------ */
@@ -431,13 +445,16 @@ export const IPC = {
   envRefresh: 'env:refresh',
   repoList: 'repo:list',
   repoAdd: 'repo:add',
-  repoRemove: 'repo:remove',
+  repoRename: 'repo:rename',
+  repoDelete: 'repo:delete',
+  repoReorder: 'repo:reorder',
   repoPick: 'repo:pick',
   sessionList: 'session:list',
   sessionDetail: 'session:detail',
   sessionComments: 'session:comments',
   sessionExportMarkdown: 'session:exportMarkdown',
   sessionDelete: 'session:delete',
+  sessionReorder: 'session:reorder',
   titleSet: 'title:set',
   titleGenerate: 'title:generate',
   gitBranches: 'git:branches',
@@ -452,6 +469,8 @@ export const IPC = {
   configSet: 'config:set',
   configUnset: 'config:unset',
   configTest: 'config:test',
+  configProviderSave: 'config:providerSave',
+  configProviderModels: 'config:providerModels',
   configBackups: 'config:backups',
   configRestore: 'config:restore',
   settingsGet: 'settings:get',
@@ -489,6 +508,55 @@ export interface ConfigTestResult {
   ok: boolean
   /** Raw output from `ocr llm test`, trimmed for display. */
   output: string
+}
+
+/**
+ * A channel as the settings form submits it.
+ *
+ * `name` is the config key — `custom_providers.<name>` or `providers.<name>` —
+ * and is deliberately immutable once created, because every other key of that
+ * entry hangs off it.
+ */
+export interface ProviderSaveRequest {
+  name: string
+  /** True for a gateway the user defined, false for one ocr ships. */
+  custom: boolean
+  url: string
+  protocol: string
+  /** Only written when non-empty, so editing can leave the stored key alone. */
+  apiKey?: string
+  models: string[]
+}
+
+export interface ProviderSaveResult {
+  ok: boolean
+  /** Every config key the write touched, in the order it was written. */
+  keys: string[]
+  output: string
+  backupPath?: string | null
+  error?: string
+}
+
+/**
+ * Asks a gateway which models it serves.
+ *
+ * The form's current values travel with the request so the button also works
+ * before a channel exists (and before its key has been stored).
+ */
+export interface ProviderModelsRequest {
+  name: string
+  custom: boolean
+  /** Blank fields fall back to the stored entry, then to the built-in catalogue. */
+  url?: string
+  protocol?: string
+  /** Blank means "use the stored key", which never leaves the main process. */
+  apiKey?: string
+}
+
+export interface ProviderModelsResult {
+  models: string[]
+  /** Endpoint that was queried, shown so a failure is easy to talk about. */
+  endpoint: string
 }
 
 /** Outcome of a `ocr config set` / `unset` call. */

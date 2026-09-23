@@ -13,6 +13,11 @@ import type {
   MutateResultView,
   OcrConfigView,
   Preview,
+  ProviderModelsRequest,
+  ProviderModelsResult,
+  ProviderSaveRequest,
+  ProviderSaveResult,
+  RepoDeleteResult,
   RepoEntry,
   ReviewComment,
   ReviewOptions,
@@ -74,7 +79,20 @@ export interface OcrApiSurface {
   /* repositories */
   listRepos(): Promise<IpcResult<RepoEntry[]>>
   addRepo(dir: string): Promise<IpcResult<RepoEntry | null>>
-  removeRepo(dir: string): Promise<IpcResult<boolean>>
+  /**
+   * Renames a repository in the rail.
+   *
+   * The folder on disk is never touched, so the paths recorded inside its
+   * sessions keep working; an empty name restores the folder name.
+   */
+  renameRepo(dir: string, name: string | null): Promise<IpcResult<string | null>>
+  /**
+   * Deletes a repository: every one of its sessions moves to this client's trash
+   * and the repository stops appearing in the rail.
+   */
+  deleteRepo(dir: string): Promise<IpcResult<RepoDeleteResult>>
+  /** Stores the order the user dragged repositories into. */
+  reorderRepos(dirs: string[]): Promise<IpcResult<string[]>>
   pickRepo(): Promise<IpcResult<string | null>>
 
   /* sessions */
@@ -92,6 +110,8 @@ export interface OcrApiSurface {
    * unlinked, so the operation stays recoverable; `trashedTo` reports where.
    */
   deleteSession(repoDir: string, sessionId: string): Promise<IpcResult<DeleteSessionResult>>
+  /** Stores the order the user dragged one repository's sessions into. */
+  reorderSessions(repoDir: string, sessionIds: string[]): Promise<IpcResult<string[]>>
 
   /* session titles (client-owned; ocr has no title concept) */
   /** Renames a session. An empty title clears it. */
@@ -131,6 +151,17 @@ export interface OcrApiSurface {
   setConfig(key: string, value: string): Promise<IpcResult<MutateResultView>>
   unsetConfig(key: string): Promise<IpcResult<MutateResultView>>
   testConfig(): Promise<IpcResult<ConfigTestResult>>
+  /** Creates or updates a whole channel in one batched, backed-up write. */
+  saveProvider(request: ProviderSaveRequest): Promise<IpcResult<ProviderSaveResult>>
+  /**
+   * Asks a channel's gateway which models it serves.
+   *
+   * The form's current url/protocol/key travel with the request, so this also
+   * works while a channel is still being created.
+   */
+  fetchProviderModels(
+    request: ProviderModelsRequest
+  ): Promise<IpcResult<ProviderModelsResult>>
   listBackups(): Promise<IpcResult<ConfigBackup[]>>
   restoreBackup(backupPath: string): Promise<IpcResult<{ ok: boolean; error?: string }>>
 

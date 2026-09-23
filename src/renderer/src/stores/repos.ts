@@ -11,6 +11,15 @@ const SEARCH_CONCURRENCY = 4
 /** Give up on automatic naming after this many failures in a row. */
 const TITLE_FAILURE_LIMIT = 3
 
+/**
+ * Sessions a repository shows before the user asks for the rest.
+ *
+ * A repository with years of history would otherwise push every other repository
+ * off the rail, and the newest handful is what a review workflow actually reaches
+ * for. The rest stay one click away.
+ */
+const SESSION_PREVIEW_LIMIT = 6
+
 export interface SessionMatch {
   repo: RepoEntry
   session: SessionListEntry
@@ -39,6 +48,8 @@ export const useRepoStore = defineStore('repos', () => {
 
   /** Repo identifiers whose children are visible. */
   const expanded = ref<string[]>([])
+  /** Repo identifiers showing their whole history rather than a preview. */
+  const fullHistory = ref<string[]>([])
   /** Session summaries keyed by repo identifier. */
   const sessions = ref<Record<string, SessionListEntry[]>>({})
   const loadingSessions = ref<string[]>([])
@@ -154,6 +165,9 @@ export const useRepoStore = defineStore('repos', () => {
     const key = repoKey(repo)
     if (expanded.value.includes(key)) {
       expanded.value = expanded.value.filter((k) => k !== key)
+      // Collapsing is also how the rail is kept short, so reopening starts from
+      // the preview again instead of restoring a hundred rows.
+      fullHistory.value = fullHistory.value.filter((k) => k !== key)
       return
     }
     expanded.value = [...expanded.value, key]
@@ -163,6 +177,115 @@ export const useRepoStore = defineStore('repos', () => {
     // search also loads session lists — and loading a list to match a string
     // must never cost one model call per session in every repository.
     enqueueTitles(repo.dir, sessions.value[key] ?? [])
+  }
+
+  /** Every session currently cached for one repository, in display order. */
+  function sessionsFor(repo: RepoEntry): SessionListEntry[] {
+    return sessions.value[repoKey(repo)] ?? []
+  }
+
+  function isFullHistory(repo: RepoEntry): boolean {
+    return fullHistory.value.includes(repoKey(repo))
+  }
+
+  /** Rows to render: the preview, or everything once the user asked for it. */
+  function visibleSessions(repo: RepoEntry): SessionListEntry[] {
+    const list = sessionsFor(repo)
+    return isFullHistory(repo) ? list : list.slice(0, SESSION_PREVIEW_LIMIT)
+  }
+
+  /** How many rows the "展开其余 n 个会话" button would add. */
+  function hiddenSessionCount(repo: RepoEntry): number {
+    return Math.max(0, sessionsFor(repo).length - SESSION_PREVIEW_LIMIT)
+  }
+
+  function toggleFullHistory(repo: RepoEntry): void {
+    const key = repoKey(repo)
+    fullHistory.value = fullHistory.value.includes(key)
+      ? fullHistory.value.filter((k) => k !== key)
+      : [...fullHistory.value, key]
+  }
+
+  /* ---------------- ordering ---------------- */
+
+  /**
+   * Moves `from` next to `to`, before or after it.
+   *
+   * Returns a new array; an unknown id leaves the order untouched, so a stale
+   * drag (the row disappeared under the cursor) cannot scramble the list.
+   */
+  function moveWithin(list: string[], from: string, to: string, after: boolean): string[] {
+    if (from === to) return list
+    const index = list.indexOf(from)
+    const target = list.indexOf(to)
+    if (index === -1 || target === -1) return list
+
+    const next = [...list]
+    next.splice(index, 1)
+    const at = next.indexOf(to)
+    next.splice(after ? at + 1 : at, 0, from)
+    return next
+  }
+
+  /**
+   * Stores a dragged repository order.
+   *
+   * The list is reordered in place first so the row follows the cursor without
+   * waiting for the filesystem write; a failed write reloads instead of leaving
+   * the rail showing an order that was never saved.
+   */
+  async function reorderRepos(fromKey: string, toKey: string, after: boolean): Promise<void> {
+    const before = repos.value
+    const keys = before.map((repo) => repoKey(repo))
+    const next = moveWithin(keys, fromKey, toKey, after)
+    if (next === keys || next.join('\u0000') === keys.join('\u0000')) return
+
+    const byKey = new Map(before.map((repo) => [repoKey(repo), repo]))
+    const ordered = next
+      .map((key) => byKey.get(key))
+      .filter((repo): repo is RepoEntry => repo !== undefined)
+    if (ordered.length !== before.length) return
+
+    repos.value = ordered
+
+    try {
+      await unwrap(window.ocr.reorderRepos(ordered.map((repo) => repo.dir || repo.key)))
+    } catch (err) {
+      ui.notifyError(err)
+      await load()
+    }
+  }
+
+  /** Stores a dragged order for one repository's sessions. */
+  async function reorderSessions(
+    repo: RepoEntry,
+    fromId: string,
+    toId: string,
+    after: boolean
+  ): Promise<void> {
+    const key = repoKey(repo)
+    const list = sessions.value[key]
+    if (!list) return
+
+    const ids = list.map((session) => session.session_id)
+    const next = moveWithin(ids, fromId, toId, after)
+    if (next.join('\u0000') === ids.join('\u0000')) return
+
+    const byId = new Map(list.map((session) => [session.session_id, session]))
+    const ordered = next
+      .map((id) => byId.get(id))
+      .filter((session): session is SessionListEntry => session !== undefined)
+    if (ordered.length !== list.length) return
+
+    sessions.value = { ...sessions.value, [key]: ordered }
+
+    if (!repo.dir) return
+    try {
+      await unwrap(window.ocr.reorderSessions(repo.dir, next))
+    } catch (err) {
+      ui.notifyError(err)
+      await loadSessions(repo, true)
+    }
   }
 
   /**
@@ -336,21 +459,90 @@ export const useRepoStore = defineStore('repos', () => {
     ui.notify(`已添加仓库：${picked}`, 'ok')
   }
 
-  /** Hides a repository from the rail without deleting its session history. */
-  async function removeRepo(repo: RepoEntry): Promise<void> {
+  /**
+   * Renames a repository in the rail.
+   *
+   * Only this client's label changes — the folder and the paths recorded inside
+   * its sessions are untouched, which is why a rename can never orphan history.
+   * An empty name restores the folder name.
+   */
+  async function renameRepo(repo: RepoEntry, name: string): Promise<boolean> {
     if (!repo.dir) {
-      ui.notifyError('这个仓库的路径无法解析，无法移除记录。')
-      return
+      ui.notifyError('这个仓库的路径无法解析，无法重命名。')
+      return false
     }
-    await unwrap(window.ocr.removeRepo(repo.dir))
 
-    if (activeRepoDir.value === repo.dir) {
-      activeRepoDir.value = null
-      results.clear()
-      ui.showView('welcome')
+    try {
+      const saved = await unwrap(window.ocr.renameRepo(repo.dir, name))
+      const label = saved ?? repo.dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? repo.name
+
+      repos.value = repos.value.map((entry) =>
+        repoKey(entry) === repoKey(repo) ? { ...entry, name: label } : entry
+      )
+      // The home page holds its own copies of these entries.
+      recent.value = recent.value.map((match) =>
+        repoKey(match.repo) === repoKey(repo) ? { ...match, repo: { ...match.repo, name: label } } : match
+      )
+
+      ui.notify(name.trim() ? `已重命名为「${label}」` : `已恢复原名「${label}」`, 'ok')
+      return true
+    } catch (err) {
+      ui.notifyError(err)
+      return false
     }
-    await load()
-    ui.notify(`已从侧栏移除：${repo.name}（会话记录保留在磁盘上）`, 'info')
+  }
+
+  /**
+   * Deletes a repository and its whole history.
+   *
+   * The main process moves every one of its session files into this client's
+   * trash before the repository is hidden, so this is recoverable rather than
+   * destructive — the confirmation dialog is there because it is still a lot to
+   * undo by hand, not because the data is gone.
+   */
+  async function deleteRepo(repo: RepoEntry): Promise<boolean> {
+    if (!repo.dir) {
+      ui.notifyError('这个仓库的路径无法解析，无法删除。')
+      return false
+    }
+
+    const key = repoKey(repo)
+    try {
+      const result = await unwrap(window.ocr.deleteRepo(repo.dir))
+
+      expanded.value = expanded.value.filter((k) => k !== key)
+      fullHistory.value = fullHistory.value.filter((k) => k !== key)
+      const remaining = { ...sessions.value }
+      delete remaining[key]
+      sessions.value = remaining
+      // The home page holds its own copies of these entries (see `renameRepo`).
+      // It re-reads them whenever a repository is added or removed — except when
+      // the last one goes, which leaves the length at 0 and the watcher quiet, so
+      // the entries for the deleted repository would stay on screen and clickable.
+      recent.value = recent.value.filter((match) => repoKey(match.repo) !== key)
+
+      if (activeRepoDir.value === repo.dir) {
+        activeRepoDir.value = null
+        activeSessionId.value = null
+        results.clear()
+        ui.showView('welcome')
+      }
+
+      await load()
+
+      const skipped = result.skipped.length
+        ? `；有 ${result.skipped.length} 条记录没能移入回收站，仍留在磁盘上`
+        : ''
+      ui.notify(
+        `已删除「${repo.name}」：${result.trashed} 条历史已移入回收站${skipped}`,
+        skipped ? 'error' : 'info',
+        skipped ? 9000 : 5200
+      )
+      return true
+    } catch (err) {
+      ui.notifyError(err)
+      return false
+    }
   }
 
   /**
@@ -591,7 +783,15 @@ export const useRepoStore = defineStore('repos', () => {
     openRepo,
     openSession,
     addRepo,
-    removeRepo,
+    renameRepo,
+    deleteRepo,
+    reorderRepos,
+    reorderSessions,
+    sessionsFor,
+    visibleSessions,
+    hiddenSessionCount,
+    isFullHistory,
+    toggleFullHistory,
     refreshSessions,
     renameSession,
     deleteSession,

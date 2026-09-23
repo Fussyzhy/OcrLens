@@ -1,4 +1,5 @@
 import type { LlmProtocol } from '@shared/types'
+import { asArray, asNumber, asString, authHeaders, describeError, isRecord } from './gateway'
 
 /**
  * A minimal single-turn chat client for the protocols the ocr CLI supports.
@@ -33,24 +34,8 @@ export interface LlmReply {
 const REQUEST_TIMEOUT_MS = 90_000
 
 /* ------------------------------------------------------------------ *
- * Narrowing helpers — provider payloads vary between gateways
+ * Protocol-specific request shapes
  * ------------------------------------------------------------------ */
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
 
 /** Builds the full endpoint for a protocol, tolerating version-suffixed bases. */
 function endpoint(target: LlmTarget): string {
@@ -92,17 +77,11 @@ function buildBody(target: LlmTarget, prompt: string, maxTokens: number): unknow
 }
 
 function buildHeaders(target: LlmTarget): Record<string, string> {
-  if (target.protocol === 'anthropic') {
-    return {
-      'content-type': 'application/json',
-      'x-api-key': target.apiKey,
-      'anthropic-version': '2023-06-01'
-    }
-  }
-
+  // A completion sends a body, so it needs the content type; the credential
+  // headers are the part every gateway call shares (see `gateway.ts`).
   return {
     'content-type': 'application/json',
-    authorization: `Bearer ${target.apiKey}`
+    ...authHeaders(target.protocol, target.apiKey)
   }
 }
 
@@ -150,30 +129,6 @@ function extractText(payload: unknown): string | null {
     .join('')
     .trim()
   if (blocks) return blocks
-
-  return null
-}
-
-/** Turns a provider error payload into a readable message. */
-function describeError(payload: unknown): string | null {
-  if (!isRecord(payload)) return null
-
-  const error = payload.error
-  if (isRecord(error)) {
-    const message = asString(error.message) ?? asString(error.type)
-    if (message) return message
-  }
-  if (typeof error === 'string' && error.trim()) return error.trim()
-
-  // The Responses API reports failures through `status`/`incomplete_details`.
-  if (payload.status === 'failed' || payload.status === 'incomplete') {
-    const details = payload.incomplete_details
-    if (isRecord(details)) {
-      const reason = asString(details.reason)
-      if (reason) return `模型返回 ${payload.status}：${reason}`
-    }
-    return `模型返回 ${payload.status}`
-  }
 
   return null
 }

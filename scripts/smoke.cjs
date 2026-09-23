@@ -9,6 +9,13 @@
  * the window rendered, the environment probe found git, or a session's findings
  * made it onto the screen.
  *
+ * It drives the user's real repositories and history on purpose — that is what
+ * makes it a smoke test rather than a fixture — but it must not write to the user's
+ * *client* state, and a run that drags rows, renames a repository or expands one to
+ * generate titles does write. So `userData` is always pointed at a throwaway
+ * directory (see below): the client's own settings, titles, layout and config
+ * backups stay out of reach, while the CLI's session store is read as usual.
+ *
  * Usage:
  *   yarn build
  *   node_modules\.bin\electron scripts\smoke.cjs
@@ -21,16 +28,32 @@
  *                         title, and one session is moved to the trash
  *   SMOKE_TITLE_POLL=<n>  poll attempts (×2s) for automatic naming; default 90
  *   SMOKE_ISOLATE=1       make the window click-through and unfocused
+ *   SMOKE_USERDATA=<dir>  where the client's own state is written; defaults to
+ *                         <tmp>/ocr-smoke-userdata
  *
  * Artifacts land in smoke-out/ (log, JSON report, PNG screenshots).
  */
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { app, BrowserWindow, dialog } = require('electron')
 
 const OUT_DIR = path.join(__dirname, '..', 'smoke-out')
 fs.mkdirSync(OUT_DIR, { recursive: true })
+
+/**
+ * Keep the client's own state out of the user's profile.
+ *
+ * Must happen before the app's modules ask for a path. Without it the window ran
+ * under Electron's default profile — which happens to be a different directory from
+ * the packaged app's, so nothing leaked, but only by accident: run the smoke as
+ * `electron .` and the drag and rename stages would rewrite the real
+ * `sidebar-layout.json` and every repo would come out "arranged".
+ */
+const USER_DATA = process.env.SMOKE_USERDATA || path.join(os.tmpdir(), 'ocr-smoke-userdata')
+fs.mkdirSync(USER_DATA, { recursive: true })
+app.setPath('userData', USER_DATA)
 
 const LOG_PATH = path.join(OUT_DIR, 'smoke.log')
 fs.writeFileSync(LOG_PATH, '')
@@ -197,6 +220,7 @@ app.whenReady().then(async () => {
       await new Promise((resolve) => wc.once('did-finish-load', resolve))
     }
     log(`loaded: ${wc.getURL()}`)
+    log(`client state: ${app.getPath('userData')}`)
 
     // Environment probing spawns git in throwaway repos; give it real time.
     await sleep(9000)
@@ -617,6 +641,316 @@ app.whenReady().then(async () => {
       await shot(win, '13-export-state')
     }
 
+    /* ---------------- 5c. rail: preview, drag ordering, rename, delete dialog ----------------
+     * Driven through the real DOM and the real IPC. The mutations are undone in
+     * place (the renamed repository gets its original name back, every dragged row
+     * is dragged back), so a run leaves the rail as it found it — the only lasting
+     * write is the stored order, and that ends up describing the order that was on
+     * screen all along.
+     */
+    const rail = await wc.executeJavaScript(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const repoRows = () => [...document.querySelectorAll('.repo-row')];
+      const repoNames = () => repoRows().map(r => r.querySelector('.repo-name')?.textContent?.trim() ?? null);
+      const expandedBlock = () =>
+        [...document.querySelectorAll('.repo')].find(b => b.querySelector('.sessions')) ?? null;
+      const fire = (el, type, y, dt) => el.dispatchEvent(new DragEvent(type, {
+        bubbles: true, cancelable: true, dataTransfer: dt, clientY: y
+      }));
+      const out = { repoNamesBefore: repoNames(), repoCount: repoRows().length };
+
+      /* A long history is folded behind a button rather than pushing every other
+         repository off the rail. */
+      const withMore = [...document.querySelectorAll('.repo')].find(b => b.querySelector('.sessions-more'));
+      out.moreLabel = withMore?.querySelector('.sessions-more')?.textContent?.trim() ?? null;
+      if (withMore) {
+        const shown = withMore.querySelectorAll('.session-row').length;
+        withMore.querySelector('.sessions-more').click();
+        await sleep(600);
+        const all = withMore.querySelectorAll('.session-row').length;
+        const collapseLabel = withMore.querySelector('.sessions-more')?.textContent?.trim() ?? null;
+        withMore.querySelector('.sessions-more')?.click();
+        await sleep(400);
+        out.preview = { shown, all, collapseLabel, backTo: withMore.querySelectorAll('.session-row').length };
+        // Left expanded on purpose: the drag checks below need more than one row.
+        withMore.querySelector('.sessions-more')?.click();
+        await sleep(600);
+        out.preview.reexpanded = withMore.querySelectorAll('.session-row').length;
+      }
+
+      /* The session checks below need an expanded repository, and the preview
+         button only exists past the fold. Open the second one through its chevron
+         so a short history still exercises them (and so the repository drag below
+         has a session list to land on). */
+      const secondBlock = repoRows()[1]?.closest('.repo');
+      out.secondExpanded = false;
+      if (secondBlock && !secondBlock.querySelector('.session-row')) {
+        secondBlock.querySelector('.chevron')?.click();
+        await sleep(900);
+        out.secondExpanded = !!secondBlock.querySelector('.session-row');
+      } else if (secondBlock) {
+        out.secondExpanded = true;
+      }
+
+      /* Dragging a repository below its neighbour, then back. */
+      if (repoRows().length >= 2) {
+        const before = repoNames();
+        const dt = new DataTransfer();
+        let from = repoRows()[0];
+        let onto = repoRows()[1];
+        out.dragFrom = from.querySelector('.repo-name').textContent.trim();
+        out.dragOnto = onto.querySelector('.repo-name').textContent.trim();
+
+        fire(from, 'dragstart', 0, dt);
+        fire(onto, 'dragover', onto.getBoundingClientRect().bottom - 2, dt);
+        fire(onto, 'drop', onto.getBoundingClientRect().bottom - 2, dt);
+        fire(from, 'dragend', 0, dt);
+        await sleep(1800);
+        out.afterDrag = repoNames();
+        const persisted = await window.ocr.listRepos();
+        out.persistedRepoNames = persisted.ok ? persisted.data.map(r => r.name) : null;
+
+        from = repoRows()[1];
+        onto = repoRows()[0];
+        fire(from, 'dragstart', 0, dt);
+        fire(onto, 'dragover', onto.getBoundingClientRect().top + 2, dt);
+        fire(onto, 'drop', onto.getBoundingClientRect().top + 2, dt);
+        fire(from, 'dragend', 0, dt);
+        await sleep(1800);
+        out.afterUndo = repoNames();
+        out.orderRestored = JSON.stringify(out.afterUndo) === JSON.stringify(before);
+      }
+
+      /* Dragging a repository onto the expanded session list of another one.
+         The repository's drop zone is its whole block, session list included, so a
+         drop that lands on a session row has to reorder repositories — it used to be
+         swallowed by the session row's own handler while the insert line was shown. */
+      {
+        const expandTarget = repoRows().find((row, index) =>
+          index > 0 && row.closest('.repo')?.querySelector('.session-row')
+        );
+        const dragSource = repoRows()[0];
+        if (expandTarget && dragSource) {
+          const before = repoNames();
+          const dt = new DataTransfer();
+          const firstSession = expandTarget.closest('.repo').querySelector('.session-row');
+          out.sessionDropFrom = dragSource.querySelector('.repo-name').textContent.trim();
+          out.sessionDropOnto = expandTarget.querySelector('.repo-name').textContent.trim();
+          fire(dragSource, 'dragstart', 0, dt);
+          fire(firstSession, 'dragover', firstSession.getBoundingClientRect().bottom - 2, dt);
+          fire(firstSession, 'drop', firstSession.getBoundingClientRect().bottom - 2, dt);
+          fire(dragSource, 'dragend', 0, dt);
+          await sleep(1800);
+          out.afterSessionDrop = repoNames();
+          // Compared by relative position: the dragged repository has to land
+          // immediately after the one whose session list it was dropped on.
+          out.reorderedOnSessionDrop =
+            out.afterSessionDrop.indexOf(out.sessionDropFrom) ===
+            out.afterSessionDrop.indexOf(out.sessionDropOnto) + 1;
+
+          // Put it back the way it was.
+          const back = repoRows()[1];
+          const backOnto = repoRows()[0];
+          fire(back, 'dragstart', 0, dt);
+          fire(backOnto, 'dragover', backOnto.getBoundingClientRect().top + 2, dt);
+          fire(backOnto, 'drop', backOnto.getBoundingClientRect().top + 2, dt);
+          fire(back, 'dragend', 0, dt);
+          await sleep(1800);
+          out.afterSessionDropUndo = repoNames();
+          out.sessionDropRestored = JSON.stringify(out.afterSessionDropUndo) === JSON.stringify(before);
+        }
+      }
+
+      /* Renaming a repository touches its label only. */
+      const renameRow = repoRows().find(r => r.querySelector('.icon-btn[title="重命名项目"]'));
+      if (renameRow) {
+        const original = renameRow.querySelector('.repo-name').textContent.trim();
+        out.renameOriginal = original;
+        renameRow.querySelector('.icon-btn[title="重命名项目"]').click();
+        await sleep(400);
+        const field = document.querySelector('.rename-input.repo-rename');
+        out.renameFieldOpen = !!field;
+        if (field) {
+          field.value = '烟雾测试项目';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          await sleep(1500);
+          out.renamedLabel = repoNames().includes('烟雾测试项目');
+
+          const again = repoRows().find(r => r.querySelector('.repo-name')?.textContent?.trim() === '烟雾测试项目');
+          again?.querySelector('.icon-btn[title="重命名项目"]')?.click();
+          await sleep(400);
+          const restore = document.querySelector('.rename-input.repo-rename');
+          if (restore) {
+            restore.value = original;
+            restore.dispatchEvent(new Event('input', { bubbles: true }));
+            restore.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            await sleep(1500);
+          }
+          out.renameRestored = repoNames().includes(original);
+        }
+      }
+
+      /* Dragging a session inside its repository, then back. */
+      let block = expandedBlock();
+      if (block) {
+        const before = [...block.querySelectorAll('.session-row')].map(r => r.dataset.sessionId);
+        out.sessionOrderBefore = before;
+        if (before.length >= 2) {
+          const dt = new DataTransfer();
+          let rows = [...block.querySelectorAll('.session-row')];
+          fire(rows[0], 'dragstart', 0, dt);
+          fire(rows[1], 'dragover', rows[1].getBoundingClientRect().bottom - 1, dt);
+          fire(rows[1], 'drop', rows[1].getBoundingClientRect().bottom - 1, dt);
+          fire(rows[0], 'dragend', 0, dt);
+          await sleep(2000);
+
+          block = expandedBlock();
+          out.sessionOrderAfterDrag = [...(block?.querySelectorAll('.session-row') ?? [])].map(r => r.dataset.sessionId);
+          const dir = block?.querySelector('.repo-name')?.getAttribute('title') ?? null;
+          const persisted = dir ? await window.ocr.listSessions(dir, 0) : null;
+          out.sessionOrderPersisted = persisted?.ok ? persisted.data.map(s => s.session_id) : null;
+
+          rows = [...(block?.querySelectorAll('.session-row') ?? [])];
+          if (rows.length >= 2) {
+            fire(rows[1], 'dragstart', 0, dt);
+            fire(rows[0], 'dragover', rows[0].getBoundingClientRect().top + 1, dt);
+            fire(rows[0], 'drop', rows[0].getBoundingClientRect().top + 1, dt);
+            fire(rows[1], 'dragend', 0, dt);
+            await sleep(2000);
+            block = expandedBlock();
+            out.sessionOrderAfterUndo = [...(block?.querySelectorAll('.session-row') ?? [])].map(r => r.dataset.sessionId);
+            out.sessionOrderRestored = JSON.stringify(out.sessionOrderAfterUndo) === JSON.stringify(before);
+          }
+        }
+      }
+
+      /* Deleting asks first; cancelling must change nothing. */
+      const deleteRow = repoRows().find(r => r.querySelector('.icon-btn[title="删除项目及其全部审查历史"]'));
+      if (deleteRow) {
+        deleteRow.querySelector('.icon-btn[title="删除项目及其全部审查历史"]').click();
+        await sleep(500);
+        const modal = document.querySelector('.modal');
+        out.deleteDialog = modal ? {
+          heading: modal.querySelector('h3')?.textContent?.trim() ?? null,
+          message: modal.querySelector('.modal-message')?.textContent?.trim() ?? null,
+          detail: modal.querySelector('.modal-detail')?.textContent?.trim() ?? null,
+          buttons: [...modal.querySelectorAll('.modal-actions button')].map(b => b.textContent.trim())
+        } : null;
+        const cancel = modal
+          ? [...modal.querySelectorAll('.modal-actions button')].find(b => b.textContent.trim() === '取消')
+          : null;
+        if (cancel) cancel.click();
+        await sleep(600);
+        out.dialogDismissed = !document.querySelector('.modal');
+        out.repoCountUnchanged = repoRows().length === out.repoCount;
+      }
+
+      return out;
+    })()`)
+
+    report.rail = rail
+    step('rail-interactions', rail)
+    await shot(win, '06b-rail-interactions')
+
+    // Read the client's own layout file for the one thing the page cannot show:
+    // whether restoring a name by typing it left an alias behind.
+    const layoutFile = path.join(app.getPath('userData'), 'sidebar-layout.json')
+    try {
+      const layout = JSON.parse(fs.readFileSync(layoutFile, 'utf8'))
+      rail.layoutAliases = layout.repoAliases ?? {}
+      const redundant = Object.values(rail.layoutAliases).filter(
+        (alias) => alias === rail.renameOriginal
+      )
+      assert(
+        redundant.length === 0,
+        `restoring the original name stored it as an alias (${JSON.stringify(rail.layoutAliases)})`
+      )
+    } catch (err) {
+      log(`could not read ${layoutFile}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    assert(rail.renameFieldOpen === true, `the repository rename field did not open (${JSON.stringify(rail)})`)
+    assert(
+      rail.renamedLabel === true && rail.renameRestored === true,
+      `renaming a repository did not stick or could not be undone (${JSON.stringify(rail)})`
+    )
+    assert(
+      rail.deleteDialog?.heading === '删除这个项目？',
+      `the repository delete confirmation was not shown (${JSON.stringify(rail.deleteDialog)})`
+    )
+    assert(
+      JSON.stringify(rail.deleteDialog?.buttons) === JSON.stringify(['取消', '删除项目']),
+      `the repository delete dialog does not offer cancel/confirm (${JSON.stringify(rail.deleteDialog?.buttons)})`
+    )
+    assert(
+      rail.dialogDismissed === true && rail.repoCountUnchanged === true,
+      `cancelling the repository delete dialog changed the rail (${JSON.stringify(rail)})`
+    )
+
+    // A repository dragged onto another one's expanded session list is still a drop
+    // on that repository's block; the session row's own handler used to eat it.
+    if (rail.sessionDropOnto) {
+      assert(
+        rail.reorderedOnSessionDrop === true,
+        `dropping a repository on an expanded session list did nothing (${JSON.stringify({
+          from: rail.sessionDropFrom,
+          onto: rail.sessionDropOnto,
+          after: rail.afterSessionDrop
+        })})`
+      )
+      assert(
+        rail.sessionDropRestored === true,
+        `the drop on a session list could not be undone (${JSON.stringify(rail.afterSessionDropUndo)})`
+      )
+    } else {
+      log('no expanded repository below the first one; the drop-on-session-list path was not exercised')
+    }
+
+    if (rail.preview) {
+      assert(
+        rail.preview.all > rail.preview.shown && rail.preview.collapseLabel === '收起',
+        `the session preview did not expand or collapse as expected (${JSON.stringify(rail.preview)})`
+      )
+      assert(
+        rail.preview.backTo === rail.preview.shown,
+        `collapsing the session list did not return to the preview (${JSON.stringify(rail.preview)})`
+      )
+    } else {
+      log('no repository has more than the preview limit; the 展开其余会话 button was not exercised')
+    }
+
+    if (rail.afterDrag) {
+      assert(
+        rail.afterDrag[1] === rail.dragFrom,
+        `dragging a repository did not move it (${JSON.stringify(rail.afterDrag)} from ${rail.dragFrom})`
+      )
+      assert(
+        JSON.stringify(rail.persistedRepoNames) === JSON.stringify(rail.afterDrag),
+        `the dragged repository order was not stored (${JSON.stringify(rail.persistedRepoNames)} vs ${JSON.stringify(rail.afterDrag)})`
+      )
+      assert(
+        rail.orderRestored === true,
+        `the repository order did not come back after dragging it back (${JSON.stringify(rail.afterUndo)})`
+      )
+    }
+
+    if (rail.sessionOrderAfterDrag) {
+      assert(
+        rail.sessionOrderAfterDrag[0] === rail.sessionOrderBefore[1] &&
+          rail.sessionOrderAfterDrag[1] === rail.sessionOrderBefore[0],
+        `dragging a session did not swap the two rows (${JSON.stringify(rail.sessionOrderAfterDrag)})`
+      )
+      assert(
+        JSON.stringify(rail.sessionOrderPersisted) === JSON.stringify(rail.sessionOrderAfterDrag),
+        `the dragged session order was not stored (${JSON.stringify(rail.sessionOrderPersisted)})`
+      )
+      assert(
+        rail.sessionOrderRestored === true,
+        `the session order did not come back after dragging it back (${JSON.stringify(rail.sessionOrderAfterUndo)})`
+      )
+    }
+
     /* ---------------- 6. settings page ---------------- */
 
     await wc.executeJavaScript(`(() => {
@@ -670,6 +1004,152 @@ app.whenReady().then(async () => {
     assert(
       settings.builtinToggle === null || /未配置的内置渠道/.test(settings.builtinToggle),
       `the built-in toggle is not labelled as expected (${JSON.stringify(settings.builtinToggle)})`
+    )
+    // The clickable copy of the channel's catalogue was removed: "current model"
+    // has one control, and a channel's models are chosen in its own editor.
+    assert(
+      settings.modelChips.length === 0,
+      `the removed 该渠道的模型 strip is still rendered (${JSON.stringify(settings.modelChips)})`
+    )
+    assert(
+      Boolean(settings.modelInput),
+      `the current-model field disappeared with the chip strip (${JSON.stringify(settings.modelInput)})`
+    )
+
+    /* ---------------- 6b. the channel editor ----------------
+     * Add and edit share one form, which is where a channel's models are chosen
+     * now. Nothing is saved here: the form is opened, inspected and cancelled, so
+     * the run never rewrites the user's ocr configuration.
+     */
+    const editor = await wc.executeJavaScript(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      const rows = [...document.querySelectorAll('.channel-row')];
+      out.channelRows = rows.length;
+      out.buttons = rows[0]
+        ? [...rows[0].querySelectorAll('.channel-actions button')].map(b => b.textContent.trim())
+        : null;
+
+      const edit = rows[0]?.querySelector('.channel-actions button:nth-child(2)');
+      out.rowMeta = rows[0]?.querySelector('.channel-meta')?.textContent?.replace(/\\s+/g, ' ').trim() ?? null;
+      edit?.click();
+      await sleep(500);
+      // Scoped to the row on purpose: the create form is the same component and
+      // stays in the document inside its closed details element.
+      const form = rows[0]?.querySelector('.channel-edit') ?? null;
+      out.formOpen = !!form;
+      out.formFields = form
+        ? [...form.querySelectorAll('input, select')].map(el => el.type || el.tagName.toLowerCase())
+        : null;
+      out.keyHint = form?.querySelector('.field-hint')?.textContent?.replace(/\\s+/g, ' ').trim() ?? null;
+      out.currentModels = form
+        ? [...form.querySelectorAll('.model-option')].map(o => o.textContent.trim())
+        : null;
+
+      const fetchBtn = form
+        ? [...form.querySelectorAll('button')].find(b => b.textContent.includes('获取模型列表'))
+        : null;
+      out.fetchButton = fetchBtn ? fetchBtn.textContent.trim() : null;
+      if (fetchBtn) {
+        fetchBtn.click();
+        await sleep(8000);
+        out.gridModels = form.querySelectorAll('.model-option input').length;
+        out.note = form.querySelector('.models-note')?.textContent?.replace(/\\s+/g, ' ').trim() ?? null;
+        out.checked = form.querySelectorAll('.model-option input:checked').length;
+      }
+
+      // The editor sits below the settings page's fold; scroll it into view so
+      // the screenshot taken next actually shows the form. Guarded because a
+      // missing form must fail the assertion below, not throw here first.
+      form?.scrollIntoView({ block: 'center' });
+      await sleep(700);
+      out.scrolled = true;
+
+      return out;
+    })()`)
+
+    // Photographed while the editor is open, before anything is cancelled.
+    await shot(win, '07b-channel-editor')
+
+    /* The rest of the stage: cancelling the editor, then the create form. */
+    const editorRest = await wc.executeJavaScript(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      const rows = [...document.querySelectorAll('.channel-row')];
+
+      [...(rows[0]?.querySelectorAll('.channel-edit button') ?? [])]
+        .find(b => b.textContent.trim() === '取消')?.click();
+      await sleep(400);
+      out.formClosed = !rows[0]?.querySelector('.channel-edit');
+
+      // The create form is the same component inside a folded section.
+      const summary = [...document.querySelectorAll('details.advanced summary')]
+        .find(s => s.textContent.includes('新增自定义渠道'));
+      summary?.click();
+      await sleep(400);
+      const createForm = document.querySelector('details.advanced .channel-edit');
+      out.createForm = createForm
+        ? {
+            hasNameField: !!createForm.querySelector('input[type="text"]'),
+            hasProtocolPicker: !!createForm.querySelector('select'),
+            hasKeyField: !!createForm.querySelector('input[type="password"]'),
+            fetchButton: !!([...createForm.querySelectorAll('button')]
+              .find(b => b.textContent.includes('获取模型列表'))),
+            submitDisabled: [...createForm.querySelectorAll('button')]
+              .find(b => b.textContent.includes('创建渠道'))?.disabled ?? null
+          }
+        : null;
+      out.createFormShot = true;
+
+      // Cancel so the run writes nothing.
+      [...(createForm?.querySelectorAll('button') ?? [])]
+        .find(b => b.textContent.trim() === '取消')?.click();
+      await sleep(300);
+      out.createFormClosed = !document.querySelector('details.advanced[open]');
+      return out;
+    })()`)
+
+    Object.assign(editor, editorRest)
+    report.channelEditor = editor
+    step('channel-editor', editor)
+
+    assert(editor.formOpen === true, `the channel 编辑 button opened no form (${JSON.stringify(editor)})`)
+    assert(
+      editor.formFields?.includes('password') === true,
+      `the channel editor has no API key field (${JSON.stringify(editor.formFields)})`
+    )
+    assert(
+      /当前密钥/.test(editor.keyHint ?? ''),
+      `the open editor does not show the stored (masked) key (${JSON.stringify(editor.keyHint)})`
+    )
+    assert(
+      editor.formClosed === true,
+      `cancelling the channel editor left the form open (${JSON.stringify(editor)})`
+    )
+    assert(
+      editor.gridModels > 0 || Boolean(editor.note),
+      `asking for the model list produced neither a picker nor an explanation (${JSON.stringify(editor)})`
+    )
+    // Pre-selection is only meaningful for a channel that already lists models.
+    if (/未配置模型/.test(editor.rowMeta ?? '')) {
+      log('the first channel lists no models; pre-selection of the catalogue was not exercised')
+    } else {
+      assert(
+        editor.checked > 0,
+        `the fetched catalogue did not pre-select the channel's models (${JSON.stringify(editor)})`
+      )
+    }
+    assert(
+      editor.createForm?.hasNameField === true &&
+        editor.createForm?.hasProtocolPicker === true &&
+        editor.createForm?.hasKeyField === true &&
+        editor.createForm?.fetchButton === true &&
+        editor.createForm?.submitDisabled === true,
+      `the create-channel form is not the same editor (${JSON.stringify(editor.createForm)})`
+    )
+    assert(
+      editor.createFormClosed === true,
+      `cancelling the create form left it open (${JSON.stringify(editor)})`
     )
     await shot(win, '07-settings')
 

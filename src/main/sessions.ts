@@ -4,6 +4,7 @@ import { app } from 'electron'
 import type {
   CommentFilter,
   DeleteSessionResult,
+  RepoDeleteResult,
   ReviewComment,
   SessionDetail,
   SessionItem,
@@ -11,10 +12,11 @@ import type {
   SessionSummary
 } from '@shared/types'
 import type { OcrContext } from './env'
+import { applySessionOrder } from './layout'
 import { execOcr, ocrSessionsDir } from './ocr'
 import { parseJsonLoose } from './proc'
 import { peekCwd } from './repos'
-import { removeTitle, titlesFor } from './titles'
+import { removeTitle, removeTitles, titlesFor } from './titles'
 
 /**
  * Read access to persisted review sessions.
@@ -62,12 +64,17 @@ export async function listSessions(
   // stored title simply has none — the sidebar falls back to mode and branch.
   const titles = titlesFor(sessions.map((session) => session.session_id))
 
-  return sessions.map((session) => {
+  const enriched = sessions.map((session) => {
     const stored = titles[session.session_id]
     return stored
       ? { ...session, title: stored.title, titleSource: stored.source }
       : { ...session }
   })
+
+  // The stored arrangement applies to the full history the rail renders. A capped
+  // read is a different question ("what ran most recently"), so it stays in the
+  // CLI's own newest-first order.
+  return limit === 0 ? applySessionOrder(repoDir, enriched) : enriched
 }
 
 /** Reads a single session's summary plus its per-file items. */
@@ -193,6 +200,20 @@ export async function deleteSession(
     )
   }
 
+  const trashedTo = await moveToTrash(source, sessionId)
+  return { sessionId, trashedTo }
+}
+
+/**
+ * Moves one session file into the client's trash.
+ *
+ * Shared by the single-session delete and the repository delete so both report
+ * the same destination and both treat a cross-device rename the same way.
+ *
+ * `dropTitle` is false for a repository delete, which drops every title of the
+ * batch in one write afterwards — see `removeTitles`.
+ */
+async function moveToTrash(source: string, sessionId: string, dropTitle = true): Promise<string> {
   const trash = trashDir()
   await fs.promises.mkdir(trash, { recursive: true })
 
@@ -212,8 +233,92 @@ export async function deleteSession(
   }
 
   // The title belongs to a session that no longer exists; leaving it behind
-  // accumulates orphan entries in session-titles.json forever.
-  removeTitle(sessionId)
+  // accumulates orphan entries in session-titles.json forever. Removed only once
+  // the file itself is safely in the trash.
+  if (dropTitle) removeTitle(sessionId)
+  return target
+}
 
-  return { sessionId, trashedTo: target }
+/**
+ * Moves every session recorded for one repository into the trash.
+ *
+ * Called when the user deletes a repository: the whole history leaves the rail,
+ * but nothing is destroyed — every file lands in the same client trash a single
+ * session delete uses.
+ *
+ * Files are matched on the `cwd` each session recorded, which is the same
+ * authority `deleteSession` trusts. A session whose record cannot be read, and a
+ * session file that cannot be moved, are **left in place and reported** rather
+ * than skipped quietly: silently leaving files behind is how a "deleted"
+ * repository reappears on the next scan, and the caller needs to be able to tell
+ * the user that something stayed — including the sessions that did move, which is
+ * why one bad file must not discard the whole result.
+ */
+export async function trashRepoSessions(repoDir: string): Promise<RepoDeleteResult> {
+  const root = ocrSessionsDir()
+  let keys: string[]
+  try {
+    keys = await fs.promises.readdir(root)
+  } catch {
+    throw new Error(`无法读取会话目录：${root}`)
+  }
+
+  let trashed = 0
+  const skipped: string[] = []
+  const moved: string[] = []
+
+  for (const key of keys) {
+    const dir = path.join(root, key)
+    let names: string[]
+    try {
+      const stat = await fs.promises.stat(dir)
+      if (!stat.isDirectory()) continue
+      names = await fs.promises.readdir(dir)
+    } catch {
+      // A storage directory that cannot even be listed may hold this repository's
+      // history, so it is reported: the repository is hidden either way, and a
+      // silent skip would hide sessions the user believes are gone.
+      skipped.push(dir)
+      continue
+    }
+
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue
+      const sessionId = name.slice(0, -'.jsonl'.length)
+      const source = path.join(dir, name)
+
+      if (!/^[A-Za-z0-9._-]+$/.test(sessionId)) {
+        skipped.push(source)
+        continue
+      }
+
+      const recorded = await peekCwd(source)
+      if (!recorded) {
+        skipped.push(source)
+        continue
+      }
+      // Another repository's session living in the same directory stays put.
+      if (!samePath(recorded, repoDir)) continue
+
+      try {
+        // The titles are dropped in one write after the loop (see `removeTitles`),
+        // so this must not remove them one file at a time.
+        await moveToTrash(source, sessionId, false)
+      } catch (err) {
+        console.error('failed to move a session into the trash:', err)
+        skipped.push(source)
+        continue
+      }
+
+      trashed += 1
+      moved.push(sessionId)
+    }
+
+    // Only succeeds when the directory is genuinely empty, which is exactly the
+    // condition wanted here: a leftover unreadable file keeps it in place.
+    await fs.promises.rmdir(dir).catch(() => {})
+  }
+
+  removeTitles(moved)
+  return { trashed, skipped, trashDir: trashDir() }
 }

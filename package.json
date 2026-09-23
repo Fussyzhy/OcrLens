@@ -15,8 +15,9 @@
     "typecheck": "yarn typecheck:node && yarn typecheck:web",
     "smoke:check": "node --check scripts/smoke.cjs",
     "smoke": "yarn smoke:check && electron scripts/smoke.cjs",
-    "probe:check": "node --check scripts/probe-ui.cjs",
-    "probe:ui": "yarn probe:check && electron scripts/probe-ui.cjs"
+    "probe:check": "node --check scripts/probe-ui.cjs && node --check scripts/probe-rails.cjs",
+    "probe:ui": "yarn probe:check && electron scripts/probe-ui.cjs",
+    "probe:rails": "yarn probe:check && electron scripts/probe-rails.cjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

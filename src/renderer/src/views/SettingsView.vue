@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { ConfigBackup, OcrConfigView, ProviderInfo } from '@shared/types'
+import type { ConfigBackup, OcrConfigView, ProviderInfo, ProviderSaveRequest } from '@shared/types'
 import { computed, onMounted, ref } from 'vue'
+import ChannelEditor from '../components/ChannelEditor.vue'
 import { useEnvStore } from '../stores/env'
 import { useRepoStore } from '../stores/repos'
 import { useUiStore } from '../stores/ui'
@@ -20,14 +21,6 @@ const testOutput = ref<string | null>(null)
 const testOk = ref(false)
 
 const busy = ref(false)
-
-/* ---------------- new provider form ---------------- */
-
-const draftName = ref('')
-const draftUrl = ref('')
-const draftProtocol = ref('openai')
-const draftModels = ref('')
-const draftKey = ref('')
 
 /* ---------------- git override ---------------- */
 
@@ -143,79 +136,63 @@ async function applyModel(): Promise<void> {
   }
 }
 
-/** One click on a model chip both names the model and applies it. */
-async function pickModel(name: string): Promise<void> {
-  if (!config.value || config.value.model === name) return
-  config.value.model = name
-  await applyModel()
+/** Channel whose editor is open inside its own row, if any. */
+const editTarget = ref<ProviderInfo | null>(null)
+
+/** Clicking 编辑 on the open row closes it again, like any other disclosure. */
+function beginEdit(provider: ProviderInfo): void {
+  editTarget.value = editTarget.value?.name === provider.name ? null : provider
 }
 
-async function keyPathFor(provider: ProviderInfo): Promise<string> {
-  return provider.custom
-    ? `custom_providers.${provider.name}.api_key`
-    : `providers.${provider.name}.api_key`
+/* The create form lives in a `<details>`. Cancelling clears it by remounting the
+ * editor (see `createKey`) so a typed-and-abandoned API key does not stay in the
+ * DOM behind the fold. */
+const createDetails = ref<HTMLDetailsElement | null>(null)
+const createKey = ref(0)
+
+function closeCreate(): void {
+  createKey.value += 1
+  createDetails.value?.removeAttribute('open')
 }
 
-const keyTarget = ref<ProviderInfo | null>(null)
-const keyDraft = ref('')
-
-function beginSetKey(provider: ProviderInfo): void {
-  keyTarget.value = provider
-  keyDraft.value = ''
-}
-
-async function saveKey(): Promise<void> {
-  const provider = keyTarget.value
-  if (!provider || !keyDraft.value.trim()) return
-
-  const ok = await applySet(
-    await keyPathFor(provider),
-    keyDraft.value.trim(),
-    `已更新 ${provider.name} 的 API Key`
-  )
-  if (ok) {
-    keyTarget.value = null
-    keyDraft.value = ''
-    // A missing key is the likeliest reason titling gave up; let it try again.
-    repos.retryTitles()
-  }
-}
-
-async function createProvider(): Promise<void> {
-  const name = draftName.value.trim()
-  if (!name) {
-    ui.notifyError('请填写渠道名')
-    return
-  }
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    ui.notifyError('渠道名只能包含字母、数字、下划线、点和连字符（它会成为配置键的一部分）')
-    return
-  }
-  if (!draftUrl.value.trim()) {
-    ui.notifyError('请填写 API 地址')
-    return
-  }
-
-  // Written field by field so a failure part-way through is visible rather than
-  // silently producing a half-configured provider.
-  if (!(await applySet(`custom_providers.${name}.url`, draftUrl.value.trim(), '已写入地址'))) return
-  if (!(await applySet(`custom_providers.${name}.protocol`, draftProtocol.value, '已写入协议'))) return
-
-  if (draftModels.value.trim()) {
-    if (!(await applySet(`custom_providers.${name}.models`, draftModels.value.trim(), '已写入模型目录'))) {
-      return
+/**
+ * Writes a whole channel — new or existing — and refreshes what the page shows.
+ *
+ * One batched write rather than one per field: the main process takes a single
+ * config backup for the lot, and a failure part-way through comes back saying
+ * which keys landed instead of leaving the form to guess. The editor stays open
+ * on failure, which is why this reports success rather than throwing.
+ */
+async function saveProvider(request: ProviderSaveRequest): Promise<boolean> {
+  busy.value = true
+  try {
+    const result = await window.ocr.saveProvider(request)
+    if (!result.ok) throw new Error(result.error)
+    if (!result.data.ok) {
+      const written = result.data.keys.length ? `（已写入 ${result.data.keys.join('、')}）` : ''
+      throw new Error(`${result.data.error ?? '保存失败'}${written}`)
     }
-  }
-  if (draftKey.value.trim()) {
-    if (!(await applySet(`custom_providers.${name}.api_key`, draftKey.value.trim(), '已写入密钥'))) return
-  }
 
-  ui.notify(`渠道 ${name} 已创建`, 'ok')
-  draftName.value = ''
-  draftUrl.value = ''
-  draftModels.value = ''
-  draftKey.value = ''
-  draftProtocol.value = 'openai'
+    ui.notify(`渠道 ${request.name} 已保存`, 'ok')
+    await Promise.all([loadConfig(), loadBackups()])
+
+    // Close the editor that submitted, not whichever one happens to be open: a
+    // channel's editor can be open while the create form is submitted, and closing
+    // that one instead would leave the create form (API key included) sitting in the
+    // DOM as if it had never been sent.
+    if (editTarget.value?.name === request.name) editTarget.value = null
+    else closeCreate()
+
+    // A changed url, protocol, model list or key is the likeliest fix for
+    // automatic naming having given up earlier in this app session.
+    repos.retryTitles()
+    return true
+  } catch (err) {
+    ui.notifyError(err)
+    return false
+  } finally {
+    busy.value = false
+  }
 }
 
 async function removeProvider(provider: ProviderInfo): Promise<void> {
@@ -439,25 +416,10 @@ async function reprobe(): Promise<void> {
               </div>
             </div>
 
-            <!-- The catalogue as buttons: switching a model for this channel is
-                 the same one-line config write as typing it and pressing 应用. -->
-            <div v-if="activeProvider?.models?.length" class="field">
-              <label class="field-label">该渠道的模型（点击即切换）</label>
-              <div class="model-chips">
-                <button
-                  v-for="name in activeProvider.models"
-                  :key="name"
-                  type="button"
-                  class="model-chip"
-                  :class="{ current: config.model === name }"
-                  :disabled="busy"
-                  @click="pickModel(name)"
-                >
-                  {{ name }}
-                </button>
-              </div>
-            </div>
-
+            <!-- The channel's model catalogue is edited where the channel is
+                 (see the 渠道 rows below): offering it here as a second, clickable
+                 copy of the same list made this strip look like it had two
+                 competing "current model" controls. -->
             <div class="inline">
               <button class="btn sm" :disabled="testing" @click="runTest">
                 <span v-if="testing" class="spinner" />
@@ -509,7 +471,11 @@ async function reprobe(): Promise<void> {
               v-for="provider in channelRows"
               :key="provider.name"
               class="channel-row"
-              :class="{ current: provider.active, idle: isIdle(provider) }"
+              :class="{
+                current: provider.active,
+                idle: isIdle(provider),
+                editing: editTarget?.name === provider.name
+              }"
             >
               <span
                 class="channel-dot"
@@ -542,8 +508,8 @@ async function reprobe(): Promise<void> {
                 >
                   设为当前
                 </button>
-                <button class="btn sm ghost" :disabled="busy" @click="beginSetKey(provider)">
-                  设置密钥
+                <button class="btn sm ghost" :disabled="busy" @click="beginEdit(provider)">
+                  编辑
                 </button>
                 <button
                   v-if="provider.custom"
@@ -556,86 +522,28 @@ async function reprobe(): Promise<void> {
                 </button>
               </div>
 
-              <!-- The key editor opens inside its own row. The old floating card
-                   could sit several rows away from the channel it edited. -->
-              <div v-if="keyTarget?.name === provider.name" class="channel-key">
-                <div class="field">
-                  <label class="field-label">为 {{ provider.name }} 设置 API Key</label>
-                  <input
-                    v-model="keyDraft"
-                    type="password"
-                    placeholder="粘贴密钥后保存"
-                    spellcheck="false"
-                  />
-                  <div class="field-hint">
-                    密钥只写入 ocr 配置文件，不会回传到界面；保存前会自动备份 config.json。
-                  </div>
-                </div>
-                <div class="inline">
-                  <button
-                    class="btn sm primary"
-                    :disabled="busy || !keyDraft.trim()"
-                    @click="saveKey"
-                  >
-                    保存
-                  </button>
-                  <button class="btn sm" @click="keyTarget = null">取消</button>
-                </div>
-              </div>
+              <!-- The editor opens inside its own row. A floating card could sit
+                   several rows away from the channel it was editing, and the
+                   masked key it has to show belongs next to that channel. -->
+              <ChannelEditor
+                v-if="editTarget?.name === provider.name"
+                :key="provider.name"
+                :provider="provider"
+                :on-submit="saveProvider"
+                @cancel="editTarget = null"
+              />
             </div>
           </div>
 
           <!-- Creating a channel is a rare, multi-field operation, so it stays
                folded away instead of holding a third of the page open. -->
-          <details class="advanced">
+          <details ref="createDetails" class="advanced">
             <summary>新增自定义渠道</summary>
-            <div class="row">
-              <div class="field">
-                <label class="field-label">渠道名</label>
-                <input v-model="draftName" type="text" placeholder="my-gateway" spellcheck="false" />
-              </div>
-              <div class="field">
-                <label class="field-label">协议</label>
-                <select v-model="draftProtocol">
-                  <option value="openai">openai</option>
-                  <option value="openai-responses">openai-responses</option>
-                  <option value="anthropic">anthropic</option>
-                  <option value="anthropic-bedrock">anthropic-bedrock</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="field-label">API 地址</label>
-              <input
-                v-model="draftUrl"
-                type="text"
-                placeholder="https://gateway.internal.com/v1"
-                spellcheck="false"
-              />
-            </div>
-
-            <div class="row">
-              <div class="field">
-                <label class="field-label">模型目录（逗号分隔，可留空）</label>
-                <input
-                  v-model="draftModels"
-                  type="text"
-                  placeholder="gpt-4o,claude-opus-4"
-                  spellcheck="false"
-                />
-              </div>
-              <div class="field">
-                <label class="field-label">API Key（可留空，稍后再填）</label>
-                <input v-model="draftKey" type="password" spellcheck="false" />
-              </div>
-            </div>
-
-            <div class="field-hint" style="margin-bottom: 12px">
-              渠道名只能包含字母、数字、下划线、点和连字符，它会成为 config.json 里的键。
-            </div>
-
-            <button class="btn primary" :disabled="busy" @click="createProvider">创建渠道</button>
+            <ChannelEditor
+              :key="createKey"
+              :on-submit="saveProvider"
+              @cancel="closeCreate()"
+            />
           </details>
         </template>
       </div>
