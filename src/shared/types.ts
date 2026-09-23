@@ -483,12 +483,6 @@ export interface AppSettings {
   manualRepos: string[]
   /** Repositories the user hid from the sidebar. */
   ignoredRepos: string[]
-  /** Ask the model for a session title after every completed review. */
-  autoTitle: boolean
-  /** Provider used for titling; empty means "whatever ocr is configured with". */
-  titleProvider?: string | null
-  /** Model used for titling; empty means "whatever ocr is configured with". */
-  titleModel?: string | null
 }
 
 export interface ConfigTestResult {

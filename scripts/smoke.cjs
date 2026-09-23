@@ -634,38 +634,42 @@ app.whenReady().then(async () => {
       });
       const titleCard = [...document.querySelectorAll('.card')]
         .find(c => c.querySelector('.card-head')?.textContent.includes('历史记录标题'));
+      const channelRows = [...document.querySelectorAll('.channel-row')];
+      const currentRow = channelRows.find(r => r.classList.contains('current')) ?? null;
       return {
         head: text('.view-head h1'),
         diagnostics: kv,
         warnings: [...document.querySelectorAll('.banner.warn')].map(e => e.innerText.replace(/\\s+/g, ' ').trim()),
         cards: [...document.querySelectorAll('.card-head')].map(e => e.innerText.replace(/\\s+/g, ' ').trim()),
-        providerRows: [...document.querySelectorAll('.preview-table tbody tr')].slice(0, 6).map(r => r.innerText.replace(/\\s+/g, ' ').trim()),
-        currentProvider: text('.pill'),
+        channelRows: channelRows.slice(0, 6).map(r => r.innerText.replace(/\\s+/g, ' ').trim()),
+        currentProvider: text('.current-route .pill'),
         modelInput: document.querySelector('input[list="model-options"]')?.value ?? null,
+        modelChips: [...document.querySelectorAll('.model-chip')].map(b => b.textContent.trim()),
+        currentRowActions: currentRow
+          ? [...currentRow.querySelectorAll('.channel-actions button')].map(b => b.textContent.trim())
+          : null,
+        builtinToggle: text('.section-head .link-btn'),
         backups: document.querySelectorAll('.preview-table tbody tr').length,
-        titleCard: titleCard ? {
-          autoTitleChecked: titleCard.querySelector('input[type=checkbox]')?.checked ?? null,
-          providerOptions: titleCard.querySelectorAll('select option').length,
-          modelPlaceholder: titleCard.querySelector('input[type=text]')?.placeholder ?? null,
-          buttons: [...titleCard.querySelectorAll('button')].map(b => b.textContent.trim()),
-          generationTriggers: [...titleCard.querySelectorAll('button')]
-            .filter(b => /生成|补标题|开始/.test(b.textContent)).length
-        } : null
+        titleCard: titleCard ? { present: true } : null
       };
     })()`)
 
     step('settings', settings)
     assert(
-      settings.cards.some((c) => c.includes('历史记录标题')),
-      `the settings page is missing the title card (saw ${JSON.stringify(settings.cards)})`
+      settings.titleCard === null && !settings.cards.some((c) => c.includes('历史记录标题')),
+      `the removed 历史记录标题 card is still rendered (cards: ${JSON.stringify(settings.cards)})`
     )
     assert(
-      settings.titleCard?.autoTitleChecked === true,
-      `auto-titling is off by default (saw ${JSON.stringify(settings.titleCard)})`
+      settings.channelRows.length > 0,
+      `the settings page rendered no channel rows (saw ${JSON.stringify(settings.channelRows)})`
     )
     assert(
-      settings.titleCard?.generationTriggers === 0,
-      `the settings page still exposes a manual trigger for title generation (buttons: ${JSON.stringify(settings.titleCard?.buttons)})`
+      Boolean(settings.currentProvider) && settings.currentProvider !== '未设置',
+      `the current-route strip has no provider (${JSON.stringify(settings.currentProvider)})`
+    )
+    assert(
+      settings.builtinToggle === null || /未配置的内置渠道/.test(settings.builtinToggle),
+      `the built-in toggle is not labelled as expected (${JSON.stringify(settings.builtinToggle)})`
     )
     await shot(win, '07-settings')
 

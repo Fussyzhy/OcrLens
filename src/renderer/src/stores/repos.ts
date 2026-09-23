@@ -1,8 +1,7 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import type { RepoEntry, SessionListEntry } from '@shared/types'
 import { unwrap } from '../utils/ipc'
-import { useEnvStore } from './env'
 import { useResultsStore } from './results'
 import { useUiStore } from './ui'
 
@@ -31,7 +30,6 @@ export interface SessionMatch {
  * which is a capped read that must never be mistaken for the full list.
  */
 export const useRepoStore = defineStore('repos', () => {
-  const env = useEnvStore()
   const results = useResultsStore()
   const ui = useUiStore()
 
@@ -413,8 +411,10 @@ export const useRepoStore = defineStore('repos', () => {
    *
    * Titles are produced without being asked for: any session the client learns
    * about that has no title yet is queued, including sessions that predate this
-   * feature. There is deliberately no "generate" button — naming is a property of
-   * the history list, not an action the user has to remember to take.
+   * feature. There is deliberately no "generate" button and no setting to turn it
+   * off — naming is a property of the history list, not an action the user has to
+   * remember to take, and the model that names a session is the channel ocr is
+   * already configured with (see `generateTitle` in the main process).
    *
    * Two safeguards keep that from becoming a nuisance:
    *
@@ -424,8 +424,10 @@ export const useRepoStore = defineStore('repos', () => {
    *   session, so a broken key or model cannot cause one failed request per
    *   session every time the list is read.
    *
-   * A session that failed is not retried until the app restarts or the titling
-   * settings change, which is also the natural recovery path.
+   * A session that failed is not retried until the app restarts or `retryTitles`
+   * is called. The settings page calls it whenever the channel, the model or an
+   * API key changes, which is the fix a user reaches for first and therefore the
+   * recovery path this breaker has to have.
    */
 
   interface TitleJob {
@@ -441,7 +443,6 @@ export const useRepoStore = defineStore('repos', () => {
   let titleBreakerOpen = false
 
   function enqueueTitles(repoDir: string, list: SessionListEntry[]): void {
-    if (env.settings?.autoTitle === false) return
     if (titleBreakerOpen || !repoDir) return
 
     for (const session of list) {
@@ -482,7 +483,7 @@ export const useRepoStore = defineStore('repos', () => {
             titleQueue.length = 0
             const reason = err instanceof Error ? err.message : String(err)
             ui.notifyError(
-              `自动生成标题连续失败 ${TITLE_FAILURE_LIMIT} 次，已暂停：${reason}（可在设置页调整生成标题所用的渠道或模型后重试）`
+              `自动生成标题连续失败 ${TITLE_FAILURE_LIMIT} 次，已暂停：${reason}（在设置页检查「渠道与模型」的密钥或模型后会重试）`
             )
           }
         }
@@ -492,31 +493,25 @@ export const useRepoStore = defineStore('repos', () => {
     }
   }
 
-  // Changing how titles are produced is the user telling us to try again.
-  //
-  // One getter per field on purpose: a single getter returning an array is
-  // compared by reference, so *any* replacement of `env.settings` — including an
-  // unrelated `gitOverride` edit — looked like a change, resetting the failure
-  // breaker and re-queueing every untitled session for a paid model call.
-  watch(
-    [
-      () => env.settings?.autoTitle,
-      () => env.settings?.titleProvider,
-      () => env.settings?.titleModel
-    ],
-    () => {
-      titleFailures = 0
-      titleBreakerOpen = false
-      titleSeen.clear()
-      // Retry only the repositories whose history is actually open; titled
-      // sessions are skipped by the check in `enqueueTitles`.
-      for (const repo of repos.value) {
-        if (!isExpanded(repo)) continue
-        const list = sessions.value[repoKey(repo)]
-        if (list?.length) enqueueTitles(repo.dir, list)
-      }
+  /**
+   * Clears the failure breaker and retries the histories already on screen.
+   *
+   * Called after the user changes the channel, the model or an API key: those are
+   * the changes that can fix a titling request, and without this a key corrected
+   * in the settings page would only take effect on the next app start. Only
+   * expanded repositories are queued, and titled sessions are skipped by the
+   * check in `enqueueTitles`, so this cannot re-bill a working history.
+   */
+  function retryTitles(): void {
+    titleFailures = 0
+    titleBreakerOpen = false
+    titleSeen.clear()
+    for (const repo of repos.value) {
+      if (!isExpanded(repo)) continue
+      const list = sessions.value[repoKey(repo)]
+      if (list?.length) enqueueTitles(repo.dir, list)
     }
-  )
+  }
 
   /* ---------------- deletion ---------------- */
 
@@ -600,6 +595,7 @@ export const useRepoStore = defineStore('repos', () => {
     refreshSessions,
     renameSession,
     deleteSession,
+    retryTitles,
     clearSearch
   }
 })

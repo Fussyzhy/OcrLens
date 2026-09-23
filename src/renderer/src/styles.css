@@ -1589,6 +1589,200 @@ pre.code {
 }
 
 /* ------------------------------------------------------------------ *
+ * Settings — channels and models
+ *
+ * The channel list replaced two tables (custom / built-in) that disagreed
+ * about their columns and split one idea — "which channel ocr uses" — across
+ * both. A row now reads as one line of what a channel is and what it can do,
+ * with its controls at the right edge and its key editor inside itself.
+ * ------------------------------------------------------------------ */
+
+.card-head-note {
+  color: var(--text-faint);
+  font-weight: 400;
+  font-size: 11px;
+}
+
+/* The "what is in use right now" strip: read far more often than edited. */
+.current-route {
+  padding: 14px 14px 12px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elev-2);
+}
+
+/* `.row` bottom-aligns by default, which is right when a button sits beside an
+ * input but wrong here: it would drop the 当前渠道 label below 当前模型's. */
+.current-route .row {
+  align-items: flex-start;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 22px 0 10px;
+}
+
+.section-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* A button that is a sentence: no chrome, but still a real target. */
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: var(--text);
+}
+
+.link-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-chip {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.model-chip:hover:not(:disabled) {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+.model-chip.current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.model-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.channel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elev-2);
+  transition: border-color 0.2s ease;
+}
+
+.channel-row:hover {
+  border-color: var(--border);
+}
+
+.channel-row.current {
+  border-color: rgba(43, 222, 94, 0.4);
+  background: linear-gradient(90deg, rgba(43, 222, 94, 0.07), var(--bg-elev-2) 55%);
+}
+
+/* Listed, but neither in use nor holding a key: the catalogue's leftovers. */
+.channel-row.idle {
+  opacity: 0.62;
+}
+
+.channel-row.idle:hover {
+  opacity: 1;
+}
+
+.channel-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.channel-dot.current {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.channel-dot.ready {
+  background: rgba(43, 222, 94, 0.55);
+}
+
+.channel-dot.idle {
+  background: var(--sev-high);
+  opacity: 0.7;
+}
+
+.channel-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.channel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.channel-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+/* The key editor is a full-width child of the row it edits. */
+.channel-key {
+  flex-basis: 100%;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* ------------------------------------------------------------------ *
  * Preview table
  * ------------------------------------------------------------------ */
 

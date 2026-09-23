@@ -3,7 +3,6 @@ import type { ReviewComment, TitleResult } from '@shared/types'
 import { resolveLlmTarget } from './config'
 import type { OcrContext } from './env'
 import { complete } from './llm'
-import { readSettings } from './settings'
 import { sessionComments, sessionDetail } from './sessions'
 import { getTitle, normalizeTitle, setTitle } from './titles'
 
@@ -14,8 +13,11 @@ import { getTitle, normalizeTitle, setTitle } from './titles'
  * useless at a glance. After a run completes we ask the model — once — for a
  * short name describing what was reviewed, and store it against the session id.
  *
- * Titles the user renamed by hand are never overwritten; the check happens in
- * `titles.setTitle`, so it holds even if this module is called with stale state.
+ * Naming always follows the channel and model ocr itself is configured with:
+ * there is no separate titling route to keep in sync, so changing the route for
+ * reviews changes it for names too. Titles the user renamed by hand are never
+ * overwritten; the check happens in `titles.setTitle`, so it holds even if this
+ * module is called with stale state.
  */
 
 /** How many findings to summarise when asking for a name. */
@@ -107,13 +109,7 @@ export async function generateTitle(
     return { sessionId, title: existing.title, model: existing.model ?? '', applied: false }
   }
 
-  const settings = readSettings()
-  const target = await resolveLlmTarget(
-    ctx.launch,
-    ctx.gitBinDir,
-    settings.titleProvider,
-    settings.titleModel
-  )
+  const target = await resolveLlmTarget(ctx.launch, ctx.gitBinDir)
 
   // Read the session before calling the model so a failure to read does not cost
   // a request.

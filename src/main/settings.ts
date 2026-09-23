@@ -16,12 +16,7 @@ const DEFAULTS: AppSettings = {
   gitOverride: null,
   ocrOverride: null,
   manualRepos: [],
-  ignoredRepos: [],
-  // On by default: a review whose row in the sidebar reads as a UUID is not
-  // meaningfully browsable, and the user asked for a name per run.
-  autoTitle: true,
-  titleProvider: null,
-  titleModel: null
+  ignoredRepos: []
 }
 
 let cache: AppSettings | null = null
@@ -45,20 +40,17 @@ function paths(value: unknown): string[] {
  *
  * Both sides of this file's boundary are untrusted: settings.json is
  * hand-editable (and may have been written by an older version), and a patch
- * arrives over IPC from the renderer. Without this, a non-string `titleProvider`
- * was persisted and later reached `providerOverride?.trim()`, failing with a
- * TypeError that had nothing to do with titles.
+ * arrives over IPC from the renderer. Without this, a non-string `gitOverride`
+ * was persisted and later reached `path.resolve()`, failing with a TypeError that
+ * had nothing to do with the field the user edited. Anything not named here is
+ * dropped, which is also how fields from earlier versions retire.
  */
 function normalize(raw: Partial<AppSettings>): AppSettings {
   return {
     gitOverride: text(raw.gitOverride, null),
     ocrOverride: text(raw.ocrOverride, null),
     manualRepos: paths(raw.manualRepos),
-    ignoredRepos: paths(raw.ignoredRepos),
-    // Absent in settings files written before auto-titling existed.
-    autoTitle: typeof raw.autoTitle === 'boolean' ? raw.autoTitle : DEFAULTS.autoTitle,
-    titleProvider: text(raw.titleProvider, null),
-    titleModel: text(raw.titleModel, null)
+    ignoredRepos: paths(raw.ignoredRepos)
   }
 }
 

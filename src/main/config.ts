@@ -164,7 +164,14 @@ export async function readConfigView(
   const { config, parseError } = readRawConfig()
 
   const activeProvider = config.provider ?? ''
-  const activeModel = config.model ?? ''
+  // `ocr config set model X` writes X into the active provider's own entry (not
+  // the top-level key), and `resolveLlmTarget` prefers that entry, so the entry
+  // is what is actually in effect. Showing the top-level key alone made the
+  // settings page keep displaying the previous model after a switch while
+  // reviews and titles already used the new one.
+  const activeEntry: RawProviderEntry =
+    config.custom_providers?.[activeProvider] ?? config.providers?.[activeProvider] ?? {}
+  const activeModel = (activeEntry.model || config.model || '').trim()
 
   const providers: ProviderInfo[] = []
 
@@ -234,18 +241,17 @@ export interface ResolvedLlmTarget {
  * is why this lives in the main process next to the rest of the config handling
  * rather than being derived from the masked view.
  *
- * Provider and model can be overridden so the user can name a cheaper model for
- * titling than the one used for reviews.
+ * There is deliberately no provider/model override: callers follow whatever ocr
+ * is configured with, so there is exactly one route in the app and no second one
+ * to drift out of date.
  */
 export async function resolveLlmTarget(
   launch: OcrLaunch | null,
-  gitBinDir: string | null,
-  providerOverride?: string | null,
-  modelOverride?: string | null
+  gitBinDir: string | null
 ): Promise<ResolvedLlmTarget> {
   const { config } = readRawConfig()
 
-  const provider = (providerOverride?.trim() || config.provider || '').trim()
+  const provider = (config.provider || '').trim()
   if (!provider) {
     throw new Error('ocr 配置里没有指定渠道，无法生成标题。')
   }
@@ -276,7 +282,7 @@ export async function resolveLlmTarget(
     )
   }
 
-  const model = (modelOverride?.trim() || entry.model || config.model || '').trim()
+  const model = (entry.model || config.model || '').trim()
   if (!model) throw new Error('没有可用的模型名，无法生成标题。')
 
   return {

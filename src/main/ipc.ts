@@ -268,13 +268,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.settingsSet, async (patch: Record<string, unknown>) => {
     // Only fields this app owns may be written from the renderer.
     const allowed: Record<string, unknown> = {}
-    for (const key of [
-      'gitOverride',
-      'ocrOverride',
-      'autoTitle',
-      'titleProvider',
-      'titleModel'
-    ]) {
+    for (const key of ['gitOverride', 'ocrOverride']) {
       if (key in patch) allowed[key] = patch[key]
     }
 

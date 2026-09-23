@@ -2,10 +2,12 @@
 import type { ConfigBackup, OcrConfigView, ProviderInfo } from '@shared/types'
 import { computed, onMounted, ref } from 'vue'
 import { useEnvStore } from '../stores/env'
+import { useRepoStore } from '../stores/repos'
 import { useUiStore } from '../stores/ui'
 import { formatRelative } from '../utils/format'
 
 const env = useEnvStore()
+const repos = useRepoStore()
 const ui = useUiStore()
 
 const config = ref<OcrConfigView | null>(null)
@@ -33,18 +35,42 @@ const gitOverrideDraft = ref('')
 
 const activeProvider = computed(() => config.value?.providers.find((p) => p.active) ?? null)
 
-const customProviders = computed(() => config.value?.providers.filter((p) => p.custom) ?? [])
-
-const builtinProviders = computed(() => config.value?.providers.filter((p) => !p.custom) ?? [])
-
-/** Built-ins that already have a stored key, plus the active one, are worth listing. */
-const configuredBuiltins = computed(() =>
-  builtinProviders.value.filter((p) => p.hasApiKey || p.active)
+/**
+ * The channels worth a permanent row: everything the user created, plus any
+ * built-in ocr already has a key for or is currently using.
+ *
+ * Custom and built-in channels are deliberately merged into one list. They said
+ * the same thing about the places they are used — `provider` in config.json is
+ * one key, and it does not care which table the name came from — so splitting
+ * them into two tables with different columns only made the reader join them
+ * back up by name.
+ */
+const configuredProviders = computed(() =>
+  (config.value?.providers ?? []).filter((p) => p.custom || p.hasApiKey || p.active)
 )
 
+/**
+ * Built-ins the CLI catalogue advertises that this client has not touched.
+ *
+ * There can be a hundred of them, so they stay behind a toggle rather than
+ * padding the list with rows that all read "未设置密钥".
+ */
 const unconfiguredBuiltins = computed(() =>
-  builtinProviders.value.filter((p) => !p.hasApiKey && !p.active)
+  (config.value?.providers ?? []).filter((p) => !p.custom && !p.hasApiKey && !p.active)
 )
+
+const showBuiltins = ref(false)
+
+const channelRows = computed(() =>
+  showBuiltins.value
+    ? [...configuredProviders.value, ...unconfiguredBuiltins.value]
+    : configuredProviders.value
+)
+
+/** True for a row that is neither in use nor has a key: shown, but plainly idle. */
+function isIdle(provider: ProviderInfo): boolean {
+  return !provider.active && !provider.hasApiKey
+}
 
 async function loadConfig(): Promise<void> {
   configLoading.value = true
@@ -96,13 +122,32 @@ async function applySet(key: string, value: string, successMessage: string): Pro
   }
 }
 
+/**
+ * Switching the route is also the recovery path for automatic titling.
+ *
+ * The history store keeps a failure breaker for the rest of the app session, so
+ * a wrong key or a model that cannot answer would otherwise stay broken until
+ * the app restarts — and the title settings that used to clear it are gone. Any
+ * change that could plausibly fix the request clears it here.
+ */
 async function activateProvider(provider: ProviderInfo): Promise<void> {
-  await applySet('provider', provider.name, `已切换到渠道 ${provider.name}`)
+  if (await applySet('provider', provider.name, `已切换到渠道 ${provider.name}`)) {
+    repos.retryTitles()
+  }
 }
 
 async function applyModel(): Promise<void> {
   if (!config.value?.model) return
-  await applySet('model', config.value.model, `已设置模型 ${config.value.model}`)
+  if (await applySet('model', config.value.model, `已设置模型 ${config.value.model}`)) {
+    repos.retryTitles()
+  }
+}
+
+/** One click on a model chip both names the model and applies it. */
+async function pickModel(name: string): Promise<void> {
+  if (!config.value || config.value.model === name) return
+  config.value.model = name
+  await applyModel()
 }
 
 async function keyPathFor(provider: ProviderInfo): Promise<string> {
@@ -131,6 +176,8 @@ async function saveKey(): Promise<void> {
   if (ok) {
     keyTarget.value = null
     keyDraft.value = ''
+    // A missing key is the likeliest reason titling gave up; let it try again.
+    repos.retryTitles()
   }
 }
 
@@ -250,58 +297,6 @@ async function reprobe(): Promise<void> {
   gitOverrideDraft.value = env.settings?.gitOverride ?? ''
   ui.notify('环境已重新探测', 'ok')
 }
-
-/* ---------------- session titles ---------------- */
-
-/**
- * A stored `titleProvider` that is no longer among the configured providers.
- *
- * `titleProvider` is a persisted string, so deleting a provider (or editing
- * ocr's config elsewhere) can leave it pointing at nothing. The `<select>` would
- * then have no matching option and render blank, hiding the fact that automatic
- * naming is broken; this is what the placeholder option below shows.
- */
-const staleTitleProvider = computed<string | null>(() => {
-  const name = env.settings?.titleProvider
-  if (!name) return null
-  return (config.value?.providers ?? []).some((provider) => provider.name === name) ? null : name
-})
-
-/**
- * Every write here goes through `unwrap`, so `{ ok: false }` rejects.
- *
- * Unhandled, that was an unhandled rejection plus a control left showing a value
- * the store never accepted; and when `setSettings` succeeded but the follow-up
- * `envInfo()` failed there was no feedback at all.
- */
-async function toggleAutoTitle(enabled: boolean): Promise<void> {
-  try {
-    await env.setOverride({ autoTitle: enabled })
-    ui.notify(enabled ? '已开启自动生成标题' : '已关闭自动生成标题', 'ok')
-  } catch (err) {
-    ui.notifyError(err)
-  }
-}
-
-async function setTitleProvider(event: Event): Promise<void> {
-  const value = (event.target as HTMLSelectElement).value
-  try {
-    await env.setOverride({ titleProvider: value || null })
-    ui.notify('已更新生成标题的渠道', 'ok')
-  } catch (err) {
-    ui.notifyError(err)
-  }
-}
-
-async function setTitleModel(event: Event): Promise<void> {
-  const value = (event.target as HTMLInputElement).value.trim()
-  try {
-    await env.setOverride({ titleModel: value || null })
-    ui.notify('已更新生成标题的模型', 'ok')
-  } catch (err) {
-    ui.notifyError(err)
-  }
-}
 </script>
 
 <template>
@@ -390,7 +385,8 @@ async function setTitleModel(event: Event): Promise<void> {
     <div class="card">
       <div class="card-head">
         渠道与模型
-        <span v-if="configLoading" class="spinner" style="margin-left: 8px" />
+        <span class="card-head-note">审查用它跑模型，自动标题也跟随它</span>
+        <span v-if="configLoading" class="spinner right" />
       </div>
 
       <div class="card-body">
@@ -405,44 +401,77 @@ async function setTitleModel(event: Event): Promise<void> {
             <span>config.json 解析失败：{{ config.parseError }}</span>
           </div>
 
-          <div class="row">
-            <div class="field">
-              <label class="field-label">当前渠道</label>
-              <div class="inline">
-                <span class="pill">{{ config.provider || '未设置' }}</span>
-                <span v-if="activeProvider" class="muted">
-                  {{ activeProvider.protocol ?? '' }}
-                </span>
+          <!-- The one block that answers "what is in use right now", kept apart
+               from the list below because it is read far more often than edited. -->
+          <div class="current-route">
+            <div class="row">
+              <div class="field">
+                <label class="field-label">当前渠道</label>
+                <div class="inline">
+                  <span class="pill">{{ config.provider || '未设置' }}</span>
+                  <span v-if="activeProvider" class="chip">
+                    {{ activeProvider.custom ? '自定义' : '内置' }}
+                  </span>
+                  <span v-if="activeProvider?.protocol" class="muted">
+                    {{ activeProvider.protocol }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="field-label">当前模型</label>
+                <div class="inline">
+                  <input
+                    v-model="config.model"
+                    type="text"
+                    list="model-options"
+                    spellcheck="false"
+                  />
+                  <button class="btn sm" :disabled="busy" @click="applyModel">应用</button>
+                </div>
+                <datalist id="model-options">
+                  <option
+                    v-for="name in activeProvider?.models ?? []"
+                    :key="name"
+                    :value="name"
+                  />
+                </datalist>
               </div>
             </div>
 
-            <div class="field">
-              <label class="field-label">当前模型</label>
-              <div class="inline">
-                <input v-model="config.model" type="text" list="model-options" spellcheck="false" />
-                <button class="btn sm" :disabled="busy" @click="applyModel">应用</button>
-              </div>
-              <datalist id="model-options">
-                <option
-                  v-for="name in activeProvider?.models ?? []"
+            <!-- The catalogue as buttons: switching a model for this channel is
+                 the same one-line config write as typing it and pressing 应用. -->
+            <div v-if="activeProvider?.models?.length" class="field">
+              <label class="field-label">该渠道的模型（点击即切换）</label>
+              <div class="model-chips">
+                <button
+                  v-for="name in activeProvider.models"
                   :key="name"
-                  :value="name"
-                />
-              </datalist>
-              <div v-if="activeProvider?.models?.length" class="field-hint">
-                该渠道目录：{{ activeProvider.models.join('、') }}
+                  type="button"
+                  class="model-chip"
+                  :class="{ current: config.model === name }"
+                  :disabled="busy"
+                  @click="pickModel(name)"
+                >
+                  {{ name }}
+                </button>
               </div>
             </div>
-          </div>
 
-          <div class="inline" style="margin-bottom: 16px">
-            <button class="btn sm" :disabled="testing" @click="runTest">
-              <span v-if="testing" class="spinner" />
-              {{ testing ? '测试中…' : '测试连通性 (ocr llm test)' }}
-            </button>
-            <span class="muted">会真实调用一次模型</span>
-          </div>
+            <div class="inline">
+              <button class="btn sm" :disabled="testing" @click="runTest">
+                <span v-if="testing" class="spinner" />
+                {{ testing ? '测试中…' : '测试连通性 (ocr llm test)' }}
+              </button>
+              <span class="muted">会真实调用一次模型</span>
+            </div>
 
+            <!-- Where a switched model lands is invisible in config.json (it goes
+                 into the active channel's own entry), so say it once here. -->
+            <p class="field-hint">
+              模型和密钥都记在渠道自己名下：切换渠道时会各自带出，不会互相覆盖。
+            </p>
+          </div>
           <div
             v-if="testOutput"
             class="banner"
@@ -452,162 +481,162 @@ async function setTitleModel(event: Event): Promise<void> {
             {{ testOutput }}
           </div>
 
-          <!-- custom providers -->
-          <h3 style="font-size: 13px; margin: 18px 0 8px">自定义渠道</h3>
-          <div v-if="!customProviders.length" class="muted">还没有自定义渠道。</div>
+          <!-- One list for every channel, custom or built-in: `provider` in
+               config.json names one of these and does not care which it is. -->
+          <div class="section-head">
+            <h3>渠道</h3>
+            <button
+              v-if="unconfiguredBuiltins.length"
+              type="button"
+              class="link-btn"
+              :aria-pressed="showBuiltins"
+              @click="showBuiltins = !showBuiltins"
+            >
+              {{
+                showBuiltins
+                  ? '隐藏未配置的内置渠道'
+                  : `显示未配置的内置渠道（${unconfiguredBuiltins.length}）`
+              }}
+            </button>
+          </div>
 
-          <table v-else class="preview-table">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>协议</th>
-                <th>地址</th>
-                <th>API Key</th>
-                <th>模型</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="provider in customProviders" :key="provider.name">
-                <td>
-                  {{ provider.name }}
-                  <span v-if="provider.active" class="chip" style="margin-left: 6px">当前</span>
-                </td>
-                <td>{{ provider.protocol ?? '—' }}</td>
-                <td style="overflow-wrap: anywhere">{{ provider.url ?? '—' }}</td>
-                <td>{{ provider.apiKeyMask ?? '未设置' }}</td>
-                <td>{{ provider.models.length ? provider.models.join(', ') : '—' }}</td>
-                <td class="nowrap">
-                  <button
-                    class="btn sm ghost"
-                    :disabled="busy || provider.active"
-                    @click="activateProvider(provider)"
-                  >
-                    设为当前
-                  </button>
-                  <button class="btn sm ghost" :disabled="busy" @click="beginSetKey(provider)">
-                    设置密钥
-                  </button>
-                  <button
-                    class="btn sm ghost"
-                    :disabled="busy || provider.active"
-                    title="当前使用的渠道不能直接删除"
-                    @click="removeProvider(provider)"
-                  >
-                    删除
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-if="!channelRows.length" class="muted">
+            还没有可用渠道，展开下方的「新增自定义渠道」添加一个。
+          </div>
 
-          <div v-if="keyTarget" class="card" style="margin-top: 12px; background: var(--bg-elev-2)">
-            <div class="card-body">
-              <div class="field">
-                <label class="field-label">为 {{ keyTarget.name }} 设置 API Key</label>
-                <input v-model="keyDraft" type="password" placeholder="粘贴密钥后保存" spellcheck="false" />
-                <div class="field-hint">
-                  密钥只写入 ocr 配置文件，不会回传到界面；保存前会自动备份 config.json。
+          <div v-else class="channel-list">
+            <div
+              v-for="provider in channelRows"
+              :key="provider.name"
+              class="channel-row"
+              :class="{ current: provider.active, idle: isIdle(provider) }"
+            >
+              <span
+                class="channel-dot"
+                :class="provider.active ? 'current' : provider.hasApiKey ? 'ready' : 'idle'"
+                :title="provider.hasApiKey ? '密钥已设置' : '未设置密钥'"
+              />
+              <div class="channel-main">
+                <div class="channel-name">
+                  <span>{{ provider.name }}</span>
+                  <span v-if="provider.active" class="chip current">当前</span>
+                  <span class="chip">{{ provider.custom ? '自定义' : '内置' }}</span>
+                </div>
+                <div class="channel-meta">
+                  <span>{{ provider.protocol ?? '未知协议' }}</span>
+                  <span>·</span>
+                  <span class="mono">{{ provider.url ?? '使用内置地址' }}</span>
+                  <span>·</span>
+                  <span :title="provider.models.join('、')">
+                    {{ provider.models.length ? `${provider.models.length} 个模型` : '未配置模型' }}
+                  </span>
+                  <span>·</span>
+                  <span>{{ provider.apiKeyMask ?? '未设置密钥' }}</span>
                 </div>
               </div>
-              <div class="inline">
-                <button class="btn sm primary" :disabled="busy || !keyDraft.trim()" @click="saveKey">
-                  保存
+              <div class="channel-actions">
+                <button
+                  class="btn sm ghost"
+                  :disabled="busy || provider.active"
+                  @click="activateProvider(provider)"
+                >
+                  设为当前
                 </button>
-                <button class="btn sm" @click="keyTarget = null">取消</button>
+                <button class="btn sm ghost" :disabled="busy" @click="beginSetKey(provider)">
+                  设置密钥
+                </button>
+                <button
+                  v-if="provider.custom"
+                  class="btn sm ghost"
+                  :disabled="busy || provider.active"
+                  title="当前使用的渠道不能直接删除"
+                  @click="removeProvider(provider)"
+                >
+                  删除
+                </button>
+              </div>
+
+              <!-- The key editor opens inside its own row. The old floating card
+                   could sit several rows away from the channel it edited. -->
+              <div v-if="keyTarget?.name === provider.name" class="channel-key">
+                <div class="field">
+                  <label class="field-label">为 {{ provider.name }} 设置 API Key</label>
+                  <input
+                    v-model="keyDraft"
+                    type="password"
+                    placeholder="粘贴密钥后保存"
+                    spellcheck="false"
+                  />
+                  <div class="field-hint">
+                    密钥只写入 ocr 配置文件，不会回传到界面；保存前会自动备份 config.json。
+                  </div>
+                </div>
+                <div class="inline">
+                  <button
+                    class="btn sm primary"
+                    :disabled="busy || !keyDraft.trim()"
+                    @click="saveKey"
+                  >
+                    保存
+                  </button>
+                  <button class="btn sm" @click="keyTarget = null">取消</button>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- built-ins already in use -->
-          <template v-if="configuredBuiltins.length">
-            <h3 style="font-size: 13px; margin: 18px 0 8px">已配置的内置渠道</h3>
-            <table class="preview-table">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>协议</th>
-                  <th>地址</th>
-                  <th>API Key</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="provider in configuredBuiltins" :key="provider.name">
-                  <td>
-                    {{ provider.name }}
-                    <span v-if="provider.active" class="chip" style="margin-left: 6px">当前</span>
-                  </td>
-                  <td>{{ provider.protocol ?? '—' }}</td>
-                  <td style="overflow-wrap: anywhere">{{ provider.url ?? '—' }}</td>
-                  <td>{{ provider.apiKeyMask ?? '未设置' }}</td>
-                  <td class="nowrap">
-                    <button
-                      class="btn sm ghost"
-                      :disabled="busy || provider.active"
-                      @click="activateProvider(provider)"
-                    >
-                      设为当前
-                    </button>
-                    <button class="btn sm ghost" :disabled="busy" @click="beginSetKey(provider)">
-                      设置密钥
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </template>
-
-          <!-- create provider -->
-          <h3 style="font-size: 13px; margin: 18px 0 8px">新增自定义渠道</h3>
-          <div class="row">
-            <div class="field">
-              <label class="field-label">渠道名</label>
-              <input v-model="draftName" type="text" placeholder="my-gateway" spellcheck="false" />
+          <!-- Creating a channel is a rare, multi-field operation, so it stays
+               folded away instead of holding a third of the page open. -->
+          <details class="advanced">
+            <summary>新增自定义渠道</summary>
+            <div class="row">
+              <div class="field">
+                <label class="field-label">渠道名</label>
+                <input v-model="draftName" type="text" placeholder="my-gateway" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label class="field-label">协议</label>
+                <select v-model="draftProtocol">
+                  <option value="openai">openai</option>
+                  <option value="openai-responses">openai-responses</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="anthropic-bedrock">anthropic-bedrock</option>
+                </select>
+              </div>
             </div>
-            <div class="field">
-              <label class="field-label">协议</label>
-              <select v-model="draftProtocol">
-                <option value="openai">openai</option>
-                <option value="openai-responses">openai-responses</option>
-                <option value="anthropic">anthropic</option>
-                <option value="anthropic-bedrock">anthropic-bedrock</option>
-              </select>
-            </div>
-          </div>
 
-          <div class="field">
-            <label class="field-label">API 地址</label>
-            <input
-              v-model="draftUrl"
-              type="text"
-              placeholder="https://gateway.internal.com/v1"
-              spellcheck="false"
-            />
-          </div>
-
-          <div class="row">
             <div class="field">
-              <label class="field-label">模型目录（逗号分隔，可留空）</label>
+              <label class="field-label">API 地址</label>
               <input
-                v-model="draftModels"
+                v-model="draftUrl"
                 type="text"
-                placeholder="gpt-4o,claude-opus-4"
+                placeholder="https://gateway.internal.com/v1"
                 spellcheck="false"
               />
             </div>
-            <div class="field">
-              <label class="field-label">API Key（可留空，稍后再填）</label>
-              <input v-model="draftKey" type="password" spellcheck="false" />
+
+            <div class="row">
+              <div class="field">
+                <label class="field-label">模型目录（逗号分隔，可留空）</label>
+                <input
+                  v-model="draftModels"
+                  type="text"
+                  placeholder="gpt-4o,claude-opus-4"
+                  spellcheck="false"
+                />
+              </div>
+              <div class="field">
+                <label class="field-label">API Key（可留空，稍后再填）</label>
+                <input v-model="draftKey" type="password" spellcheck="false" />
+              </div>
             </div>
-          </div>
 
-          <button class="btn primary" :disabled="busy" @click="createProvider">创建渠道</button>
+            <div class="field-hint" style="margin-bottom: 12px">
+              渠道名只能包含字母、数字、下划线、点和连字符，它会成为 config.json 里的键。
+            </div>
 
-          <div v-if="unconfiguredBuiltins.length" class="field-hint" style="margin-top: 14px">
-            还可选择的内置渠道共 {{ unconfiguredBuiltins.length }} 个，例如
-            {{ unconfiguredBuiltins.slice(0, 8).map((p) => p.name).join('、') }}…
-          </div>
+            <button class="btn primary" :disabled="busy" @click="createProvider">创建渠道</button>
+          </details>
         </template>
       </div>
     </div>
@@ -641,62 +670,6 @@ async function setTitleModel(event: Event): Promise<void> {
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
-
-    <!-- ---------------- session titles ---------------- -->
-    <div class="card">
-      <div class="card-head">
-        历史记录标题
-        <span class="muted" style="font-weight: 400; font-size: 11px">
-          自动调用模型，为每条审查记录生成标题
-        </span>
-      </div>
-      <div class="card-body">
-        <label class="checkbox" style="margin-bottom: 6px">
-          <input
-            type="checkbox"
-            :checked="env.settings?.autoTitle !== false"
-            @change="toggleAutoTitle(($event.target as HTMLInputElement).checked)"
-          />
-          <span>自动生成标题</span>
-        </label>
-        <p class="field-hint" style="margin-bottom: 14px">
-          开启后无需任何操作：每次审查结束会自动为这条记录起名，历史里还没有标题的旧记录也会在左侧列表读到它们时依次补上（一次一条，不会突发请求）。
-          手动重命名过的标题永远不会被自动覆盖；把标题清空即可让它重新自动命名。
-        </p>
-
-        <div class="row">
-          <label class="field">
-            <span class="field-label">生成标题使用的渠道</span>
-            <select :value="env.settings?.titleProvider ?? ''" @change="setTitleProvider($event)">
-              <option value="">
-                跟随 ocr 当前渠道{{ config?.provider ? `（${config.provider}）` : '（未设置）' }}
-              </option>
-              <option v-if="staleTitleProvider" :value="staleTitleProvider">
-                {{ staleTitleProvider }}（已不存在）
-              </option>
-              <option v-for="provider in config?.providers ?? []" :key="provider.name" :value="provider.name">
-                {{ provider.name }}{{ provider.custom ? '（自定义）' : '' }}
-              </option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span class="field-label">模型</span>
-            <input
-              type="text"
-              :value="env.settings?.titleModel ?? ''"
-              :placeholder="`跟随 ocr 当前模型${config?.model ? `（${config.model}）` : '（未设置）'}`"
-              spellcheck="false"
-              @change="setTitleModel($event)"
-            />
-          </label>
-        </div>
-
-        <p class="field-hint">
-          起名是件小事，指定一个便宜的小模型即可。改动这里也会清除之前的失败计数，让没能生成的记录重新尝试。
-        </p>
       </div>
     </div>
   </div>
