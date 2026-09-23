@@ -17,7 +17,9 @@
     "smoke": "yarn smoke:check && electron scripts/smoke.cjs",
     "probe:check": "node --check scripts/probe-ui.cjs && node --check scripts/probe-rails.cjs",
     "probe:ui": "yarn probe:check && electron scripts/probe-ui.cjs",
-    "probe:rails": "yarn probe:check && electron scripts/probe-rails.cjs"
+    "probe:rails": "yarn probe:check && electron scripts/probe-rails.cjs",
+    "video:check": "node --check scripts/make-video.cjs",
+    "video": "yarn build && yarn video:check && electron scripts/make-video.cjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

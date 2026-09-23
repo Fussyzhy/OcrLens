@@ -5,6 +5,7 @@ release/
 *.log
 .DS_Store
 .vite/
+.docs/
 
 # tsc incremental build info (composite projects)
 *.tsbuildinfo
