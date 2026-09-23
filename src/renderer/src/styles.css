@@ -2439,7 +2439,7 @@ pre.code {
 
 .hero-sub {
   margin: 0 auto 16px;
-  max-width: 62ch;
+  max-width: 100ch;
   color: var(--text-dim);
   font-size: 13px;
   line-height: 1.7;

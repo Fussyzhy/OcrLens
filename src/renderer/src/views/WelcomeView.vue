@@ -69,8 +69,7 @@ const gitNote = computed(() => {
       </div>
       <h1>OcrLens</h1>
       <p class="hero-sub">
-        open-code-review CLI 的可视化外壳：选仓库与审查范围、免费预览待审文件，
-        再把 finding 按文件与严重度摊开来看。
+        open-code-review CLI 的可视化界面：选仓库、定范围、预览文件，让每条 Review Finding 都清晰可见。
       </p>
 
       <div class="hero-actions">
