@@ -65,6 +65,19 @@ function createWindow(): void {
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl)
+
+    // Development only: F12 toggles DevTools.
+    //
+    // The window is frameless and its menu bar is hidden, so there is no
+    // View → Toggle Developer Tools to click. `preventDefault` keeps the key from
+    // reaching the page (where F12 does nothing today, but a future renderer
+    // binding should not have to compete with this), and auto-repeat is ignored so
+    // holding the key does not flicker the panel open and shut.
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || input.key !== 'F12' || input.isAutoRepeat) return
+      event.preventDefault()
+      mainWindow?.webContents.toggleDevTools()
+    })
   } else {
     void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
