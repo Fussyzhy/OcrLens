@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { RepoEntry, SessionListEntry } from '@shared/types'
 import { unwrap } from '../utils/ipc'
+import { isSessionInFlight } from './liveRuns'
 import { useResultsStore } from './results'
 import { useUiStore } from './ui'
 
@@ -161,6 +162,21 @@ export const useRepoStore = defineStore('repos', () => {
     }
   }
 
+  /**
+   * Opens a repository's history and feeds the naming queue, the one path both the
+   * click and a started run take.
+   *
+   * The naming queue is fed from here rather than from `loadSessions`, because a
+   * search also loads session lists — and loading a list to match a string must
+   * never cost one model call per session in every repository.
+   */
+  async function expandAndLoad(repo: RepoEntry, force = false): Promise<void> {
+    const key = repoKey(repo)
+    if (!expanded.value.includes(key)) expanded.value = [...expanded.value, key]
+    await loadSessions(repo, force)
+    enqueueTitles(repo.dir, sessions.value[key] ?? [])
+  }
+
   async function toggleExpand(repo: RepoEntry): Promise<void> {
     const key = repoKey(repo)
     if (expanded.value.includes(key)) {
@@ -170,13 +186,7 @@ export const useRepoStore = defineStore('repos', () => {
       fullHistory.value = fullHistory.value.filter((k) => k !== key)
       return
     }
-    expanded.value = [...expanded.value, key]
-    await loadSessions(repo)
-    // Opening a repository's history is what makes names worth paying for. The
-    // naming queue is fed from here rather than from `loadSessions`, because a
-    // search also loads session lists — and loading a list to match a string
-    // must never cost one model call per session in every repository.
-    enqueueTitles(repo.dir, sessions.value[key] ?? [])
+    await expandAndLoad(repo)
   }
 
   /** Every session currently cached for one repository, in display order. */
@@ -546,7 +556,7 @@ export const useRepoStore = defineStore('repos', () => {
   }
 
   /**
-   * Re-reads one repo's session list, e.g. after a run finishes.
+   * Re-reads one repo's session list, e.g. after a run finishes or names itself.
    *
    * Loads even when the repo was never expanded: the new session has to be known
    * for it to be named, and a review that produced a session is worth showing in
@@ -558,6 +568,22 @@ export const useRepoStore = defineStore('repos', () => {
     if (!repo) return
     await loadSessions(repo, true)
     enqueueTitles(repoDir, sessions.value[repoKey(repo)] ?? [])
+    // The home page keeps its own capped copy of the newest sessions; a run that
+    // just produced one would not be in it. Marking the sweep stale re-reads it on
+    // the next visit instead of spawning a CLI process per repository right now.
+    recentLoaded = false
+  }
+
+  /**
+   * Makes sure a repository's children are on screen, e.g. for a run just started.
+   *
+   * Deliberately not forced: `refreshSessions` reads the list again the moment the
+   * run's session is known, and that is the only moment a new row can appear.
+   */
+  function expandRepo(repoDir: string): void {
+    const repo = repos.value.find((r) => r.dir === repoDir)
+    if (!repo) return
+    void expandAndLoad(repo)
   }
 
   /* ---------------- titles ---------------- */
@@ -642,10 +668,50 @@ export const useRepoStore = defineStore('repos', () => {
       // protects names the user wrote by hand.
       if (session.title) continue
       if (titleSeen.has(session.session_id)) continue
+      // A session with a run behind it has no content to name yet: the file exists
+      // from the first second, but it is empty until the review produces findings.
+      // Naming it now would spend a model call on nothing and freeze a meaningless
+      // name in place for the rest of the session. The check covers the second
+      // before the run is matched to its session, when the id alone is not enough.
+      if (isSessionInFlight(repoDir, session.session_id, Date.parse(session.start_time))) continue
       titleSeen.add(session.session_id)
       titleQueue.push({ repoDir, sessionId: session.session_id })
     }
 
+    void drainTitles()
+  }
+
+  /**
+   * Names one session ahead of the queue.
+   *
+   * Called when a run finishes: that session is the row the user is looking at,
+   * and waiting behind a backfill of an old history is the wrong order. The job
+   * jumps the queue but the queue is still drained one at a time.
+   *
+   * A job already waiting is moved rather than skipped — a refresh that reached the
+   * session list first must not be able to park this one at the back, which is the
+   * whole point of the call. A job already being named cannot be promoted.
+   */
+  function queueTitleNow(repoDir: string, sessionId: string): void {
+    if (titleBreakerOpen || !repoDir) return
+
+    const waiting = titleQueue.findIndex((job) => job.sessionId === sessionId)
+    if (waiting >= 0) {
+      const [job] = titleQueue.splice(waiting, 1)
+      titleQueue.unshift(job)
+      return
+    }
+
+    if (titleSeen.has(sessionId)) return
+
+    const repo = repos.value.find((entry) => entry.dir === repoDir)
+    const known = repo
+      ? (sessions.value[repoKey(repo)] ?? []).find((entry) => entry.session_id === sessionId)
+      : undefined
+    if (known?.title) return
+
+    titleSeen.add(sessionId)
+    titleQueue.unshift({ repoDir, sessionId })
     void drainTitles()
   }
 
@@ -793,9 +859,11 @@ export const useRepoStore = defineStore('repos', () => {
     isFullHistory,
     toggleFullHistory,
     refreshSessions,
+    expandRepo,
     renameSession,
     deleteSession,
     retryTitles,
+    queueTitleNow,
     clearSearch
   }
 })

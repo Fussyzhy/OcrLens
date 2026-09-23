@@ -36,8 +36,9 @@ const MODE_LABELS: Record<string, string> = {
   scan: '全量扫描'
 }
 
-/** Terminal states from `run_manifest.terminal_state`. */
+/** Terminal states from `run_manifest.terminal_state`, plus the client's live one. */
 const STATE_LABELS: Record<string, string> = {
+  running: '运行中',
   complete: '完成',
   failed: '失败',
   skipped: '跳过',
@@ -97,6 +98,21 @@ export function sessionState(session: SessionSummary): string {
   return session.completed_files > 0 ? 'complete' : 'skipped'
 }
 
+/**
+ * Status key for a run this window is still holding.
+ *
+ * The client tracks a run as starting/running/finished/failed/cancelled while a
+ * session summary uses complete/aborted/…; both end up in the same dot, so the
+ * translation lives next to `sessionState` instead of being spelled out again
+ * wherever a run is drawn.
+ */
+export function runPhaseState(phase: string): string {
+  if (phase === 'starting' || phase === 'running') return 'running'
+  if (phase === 'cancelled') return 'aborted'
+  if (phase === 'failed') return 'failed'
+  return 'complete'
+}
+
 /** Formats a nanosecond duration from a session summary. */
 export function formatDurationNs(ns: number | undefined): string {
   if (!ns || ns <= 0) return '—'
@@ -114,6 +130,18 @@ export function formatDurationMs(ms: number): string {
 
   const hours = Math.floor(minutes / 60)
   return `${hours}h${(minutes % 60).toString().padStart(2, '0')}m`
+}
+
+/**
+ * Elapsed time of a run in flight.
+ *
+ * Unlike `formatDurationMs` a run that started a moment ago reads "0s" rather than
+ * a dash: the dash means "no duration to speak of", which is exactly the case a
+ * live run is not.
+ */
+export function formatElapsedMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0s'
+  return formatDurationMs(Math.max(ms, 1))
 }
 
 /** Short absolute timestamp, e.g. "09-22 11:23". */

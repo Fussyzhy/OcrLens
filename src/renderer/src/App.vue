@@ -10,16 +10,23 @@ import SettingsView from './views/SettingsView.vue'
 import WelcomeView from './views/WelcomeView.vue'
 import { useEnvStore } from './stores/env'
 import { useRepoStore } from './stores/repos'
+import { useRunStore } from './stores/run'
 import { useUiStore } from './stores/ui'
 
 const env = useEnvStore()
 const repos = useRepoStore()
+const run = useRunStore()
 const ui = useUiStore()
 
 onMounted(async () => {
   // Environment first: everything else depends on knowing where ocr and git are.
   await env.load()
   await repos.load()
+
+  // Reviews outlive this page: the dev server's HMR (and any reload) throws away
+  // the renderer's run state while the main process keeps the CLI processes alive.
+  // Asking for the runs in flight is what keeps the rail honest after a reload.
+  await run.attachExisting()
 })
 </script>
 

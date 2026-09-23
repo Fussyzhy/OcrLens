@@ -426,6 +426,33 @@ export interface RunProgress {
   message?: string
 }
 
+/**
+ * The session a live run turned out to be writing.
+ *
+ * The CLI mints its own session id and offers no way to choose one, so the id is
+ * discovered by watching the repository's session list while the run is alive —
+ * the file appears within a second of the process starting. The rail uses this to
+ * show the run as a real session row instead of a placeholder.
+ */
+export interface RunSessionBound {
+  runId: string
+  repoDir: string
+  sessionId: string
+}
+
+/** A run still in flight in the main process; used to re-attach after a reload. */
+export interface ActiveRunView {
+  runId: string
+  repoDir: string
+  /** Human-readable command line, for the panel header. */
+  command: string
+  /** How the run was started; the rail labels a running row with it. */
+  mode: ReviewMode
+  /** Epoch milliseconds, so a re-attached panel can keep counting. */
+  startedAt: number
+  sessionId?: string
+}
+
 export interface GitRef {
   name: string
   /** True for the currently checked-out branch. */
@@ -465,6 +492,8 @@ export const IPC = {
   runLog: 'run:log',
   runDone: 'run:done',
   runProgress: 'run:progress',
+  runSession: 'run:session',
+  runList: 'run:list',
   configRead: 'config:read',
   configSet: 'config:set',
   configUnset: 'config:unset',

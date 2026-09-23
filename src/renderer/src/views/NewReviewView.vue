@@ -28,6 +28,20 @@ const MODES: { value: ReviewMode; title: string; desc: string }[] = [
 /** Repos that failed to resolve cannot be reviewed. */
 const repoUsable = computed(() => Boolean(run.repoDir))
 
+/**
+ * Runs of *other* repositories.
+ *
+ * They are deliberately not shown here as progress: their log belongs to the
+ * session they are writing, and only the repository this page is about can be
+ * started from it.
+ */
+const otherReposRunning = computed(() => {
+  const names = run.runs
+    .filter((entry) => run.isRunLive(entry) && entry.repoDir !== run.repoDir)
+    .map((entry) => repos.repos.find((item) => item.dir === entry.repoDir)?.name ?? entry.repoDir)
+  return [...new Set(names)].join('、')
+})
+
 function selectMode(mode: ReviewMode): void {
   run.mode = mode
   run.markStale()
@@ -377,9 +391,25 @@ async function start(): Promise<void> {
   
             <div class="inline">
               <button class="btn primary" :disabled="!run.canStart" @click="start">
-                {{ run.running ? '审查进行中…' : '启动审查' }}
+                {{
+                  run.running
+                    ? '审查进行中…'
+                    : run.startingRun
+                      ? '正在启动…'
+                      : '启动审查'
+                }}
               </button>
-              <button v-if="run.running" class="btn danger" @click="run.cancel()">取消</button>
+              <button
+                v-if="run.running"
+                class="btn danger"
+                :disabled="run.cancelling"
+                @click="run.cancel()"
+              >
+                取消
+              </button>
+              <!-- The same repository cannot be reviewed twice at once; other
+                   repositories can run alongside this one. -->
+              <span v-if="run.running" class="muted">这个项目已有一个任务在运行</span>
               <span v-if="run.isScan" class="muted">全量扫描可能运行较久，且消耗较多额度。</span>
             </div>
           </div>
@@ -387,6 +417,23 @@ async function start(): Promise<void> {
           <div v-if="run.logs.length || run.running" class="log">
             <div v-if="!run.logs.length" class="log-empty">等待输出…</div>
             <div v-for="(line, index) in run.logs" :key="index" class="log-line">{{ line }}</div>
+          </div>
+
+          <!-- A failed run only got a toast, which is gone by the time anyone reads
+               the log it left behind. -->
+          <div v-if="run.currentError" class="card-body">
+            <div class="banner error">
+              <span>{{ run.currentError }}</span>
+            </div>
+          </div>
+
+          <!-- Other repositories can be reviewed at the same time; this page only
+               ever shows the run of the repository it belongs to, and the rail is
+               where the other ones are picked up. -->
+          <div v-if="otherReposRunning" class="card-body">
+            <div class="field-hint">
+              其他项目正在运行：{{ otherReposRunning }}（在左侧栏各自的会话中查看）
+            </div>
           </div>
         </div>
       </div>

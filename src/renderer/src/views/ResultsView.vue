@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import FindingCard from '../components/FindingCard.vue'
 import { useRepoStore } from '../stores/repos'
 import { useResultsStore } from '../stores/results'
+import { useRunStore } from '../stores/run'
 import { useUiStore } from '../stores/ui'
 import { copyText } from '../utils/clipboard'
 import { buildSessionMarkdown, suggestReportFileName } from '../utils/markdown'
@@ -10,6 +11,7 @@ import {
   categoryLabel,
   formatDateTime,
   formatDurationNs,
+  formatElapsedMs,
   modeLabel,
   severityLabel,
   stateLabel
@@ -17,7 +19,32 @@ import {
 
 const repos = useRepoStore()
 const results = useResultsStore()
+const run = useRunStore()
 const ui = useUiStore()
+
+/**
+ * The run writing this session, if it is still alive.
+ *
+ * The rail opens a running task in its own session, so this page has to show the
+ * live log rather than the "no findings" state a half-written session produces.
+ */
+const liveRun = computed(() => (results.sessionId ? run.liveRunForSession(results.sessionId) : null))
+
+/**
+ * A run that ended and left this session behind — interrupted above all.
+ *
+ * Its log exists only here: the CLI's aborted session has no `session_end` record,
+ * so the window that watched it is the only place the output was ever collected.
+ */
+const keptRun = computed(() => {
+  if (!results.sessionId) return null
+  const entry = run.runForSession(results.sessionId)
+  return entry && !run.isRunLive(entry) && entry.phase !== 'finished' ? entry : null
+})
+
+function stopRun(): void {
+  if (liveRun.value) void run.cancel(liveRun.value.runId)
+}
 
 const summary = computed(() => results.summary)
 
@@ -129,8 +156,9 @@ async function copyMarkdown(): Promise<void> {
 
     <!-- Export controls. A report can be handed to a person or to an agent, so
          the button says which findings would go in rather than leaving the
-         filter state to be guessed. -->
-    <div v-if="summary && !results.loading" class="inline head-actions">
+         filter state to be guessed. Hidden while the run is still writing: there
+         is no report yet. -->
+    <div v-if="summary && !results.loading && !liveRun" class="inline head-actions">
       <span v-if="hiddenByFilter" class="muted nowrap" style="font-size: 11px">
         当前筛选 {{ results.filtered.length }}/{{ results.comments.length }}
       </span>
@@ -164,11 +192,62 @@ async function copyMarkdown(): Promise<void> {
   </div>
 
   <div class="view-body">
+    <!-- A running task lives in its session: this is the record the rail opens, so
+         the log belongs here rather than in whichever page started the review. -->
+    <div v-if="liveRun" class="card run-live" :data-run-id="liveRun.runId">
+      <div class="card-head">
+        <span class="spinner" />
+        <span>{{ liveRun.statusText }}</span>
+        <span class="muted right inline">
+          {{ modeLabel(liveRun.mode) }} · {{ formatElapsedMs(liveRun.elapsedMs) }}
+          <button
+            class="btn sm danger"
+            style="margin-left: 10px"
+            :disabled="liveRun.cancelling"
+            @click="stopRun()"
+          >
+            {{ liveRun.cancelling ? '正在中断…' : '停止' }}
+          </button>
+        </span>
+      </div>
+      <div class="run-live-command mono muted">{{ liveRun.command }}</div>
+      <!-- A session still being written may not read back cleanly; that is the
+           run being unfinished, not a failure worth an error banner. -->
+      <div v-if="results.error" class="run-live-command muted">
+        会话内容要在运行结束后才能完整读取。
+      </div>
+      <div class="log">
+        <div v-if="!liveRun.logs.length" class="log-empty">等待输出…</div>
+        <div v-for="(line, index) in liveRun.logs" :key="index" class="log-line">{{ line }}</div>
+      </div>
+    </div>
+
+    <!-- The CLI's interrupted session keeps no `session_end` record, so this log is
+         the only account of what the stopped run managed to do. -->
+    <div v-else-if="keptRun" class="card run-live">
+      <div class="card-head">
+        <span>{{ keptRun.phase === 'cancelled' ? '这次运行已中断' : '这次运行没有正常结束' }}</span>
+        <span class="muted right inline">
+          {{ modeLabel(keptRun.mode) }} · {{ formatElapsedMs(keptRun.elapsedMs) }}
+        </span>
+      </div>
+      <div class="run-live-command mono muted">{{ keptRun.command }}</div>
+      <!-- The toast that carried this is long gone; without it the log ends for no
+           visible reason. -->
+      <div v-if="keptRun.error" class="run-live-command">
+        <span class="muted">失败原因：</span>{{ keptRun.error }}
+      </div>
+      <div class="log">
+        <div v-if="!keptRun.logs.length" class="log-empty">没有保留输出</div>
+        <div v-for="(line, index) in keptRun.logs" :key="index" class="log-line">{{ line }}</div>
+      </div>
+    </div>
+
     <div v-if="results.loading" class="empty">
       <span class="spinner" /> <span style="margin-left: 8px">正在读取会话…</span>
     </div>
 
-    <div v-else-if="results.error" class="banner error">
+    <div v-else-if="results.error && !liveRun" class="banner error">
       <span>✕</span>
       <span>{{ results.error }}</span>
     </div>
@@ -266,7 +345,12 @@ async function copyMarkdown(): Promise<void> {
       </div>
 
       <!-- Findings grouped by file -->
-      <div v-if="!results.comments.length" class="empty">
+      <div v-if="!results.comments.length && liveRun" class="empty">
+        <h2>审查进行中…</h2>
+        <p>运行结束后结果会出现在这里，期间可以先看上面的实时日志。</p>
+      </div>
+
+      <div v-else-if="!results.comments.length" class="empty">
         <h2>这个会话没有产生 finding</h2>
         <p>可能是改动本身没有问题，也可能选中的文件都被排除了。</p>
       </div>

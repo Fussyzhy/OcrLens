@@ -79,8 +79,10 @@ const api: OcrApiSurface = {
   previewRun: (options) => invoke(IPC.previewRun, options),
   startRun: (options) => invoke(IPC.startRun, options),
   cancelRun: (runId: string) => invoke(IPC.cancelRun, runId),
+  listRuns: () => invoke(IPC.runList),
   onRunLog: (callback) => subscribe(IPC.runLog, callback),
   onRunProgress: (callback) => subscribe(IPC.runProgress, callback),
+  onRunSession: (callback) => subscribe(IPC.runSession, callback),
   onRunDone: (callback) => subscribe(IPC.runDone, callback),
 
   /* config */

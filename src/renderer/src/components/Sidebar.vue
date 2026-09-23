@@ -3,14 +3,73 @@ import { nextTick, ref, watch } from 'vue'
 import type { RepoEntry, SessionListEntry, SessionSummary } from '@shared/types'
 import { useEnvStore } from '../stores/env'
 import { useRepoStore } from '../stores/repos'
+import { useRunStore, type RunState } from '../stores/run'
 import { useUiStore } from '../stores/ui'
-import { formatRelative, modeLabel, sessionState, stateLabel } from '../utils/format'
+import { formatElapsedMs, formatRelative, modeLabel, runPhaseState, sessionState, stateLabel, truncate } from '../utils/format'
 import ConfirmDialog from './ConfirmDialog.vue'
 import logoUrl from '../assets/ocrlens-logo.png'
 
 const env = useEnvStore()
 const repos = useRepoStore()
+const run = useRunStore()
 const ui = useUiStore()
+
+/** The logo is the way home: it is the one control that is always on screen. */
+function goHome(): void {
+  ui.showView('welcome')
+}
+
+/** The live run behind a row, if the row's session has one. */
+function liveOf(session: SessionListEntry): RunState | null {
+  return run.liveRunForSession(session.session_id)
+}
+
+/**
+ * Row label: a running session is called by its state until the model names it.
+ *
+ * The user asked for the run to be named first and the fallback to say what is
+ * actually happening, so a title that already exists always wins.
+ */
+function sessionTitle(session: SessionListEntry): string {
+  if (liveOf(session) && !session.title) return `运行中 · ${modeLabel(session.review_mode)}`
+  return repos.sessionLabel(session)
+}
+
+function stopRun(session: SessionListEntry): void {
+  const live = liveOf(session)
+  if (live) void run.cancel(live.runId)
+}
+
+/**
+ * A repository's runs that have no session row to live in.
+ *
+ * The CLI's session file appears about a second into a run; until its id is known
+ * the task is still shown, so a started review is never invisible. A run the CLI
+ * never recorded — cancelled in that first second, or failed before writing —
+ * keeps a row as well, because its log is the only record of what happened.
+ *
+ * A run that *did* get a session is only rowless while it is in flight: once it is
+ * over, its record lives in the list, and a record the user deleted must not come
+ * back as a row claiming no record was ever written.
+ */
+function rowlessRuns(repo: RepoEntry): RunState[] {
+  const known = repos.sessionsFor(repo).map((session) => session.session_id)
+  return run
+    .runsFor(repo.dir)
+    .filter((entry) => !entry.sessionId || (run.isRunLive(entry) && !known.includes(entry.sessionId)))
+}
+
+function rowlessLabel(entry: RunState): string {
+  if (run.isRunLive(entry)) return `运行中 · ${modeLabel(entry.mode)}`
+  return `${stateLabel(runPhaseState(entry.phase))} · ${modeLabel(entry.mode)}`
+}
+
+function rowlessHint(entry: RunState): string {
+  if (run.isRunLive(entry)) return '等待会话记录'
+  // A run that died before the CLI wrote anything is the only row that carries the
+  // reason: there is no session to open, so the rail is where it has to be readable.
+  return entry.error ? truncate(entry.error, 60) : '未生成会话记录'
+}
 
 /** Session currently being renamed in place, if any. */
 const editingId = ref<string | null>(null)
@@ -167,6 +226,14 @@ async function confirmDeleteRepo(): Promise<void> {
   // click from issuing two deletes.
   deletingRepo.value = true
   try {
+    // A review still writing into this repository would keep writing after its
+    // history moved to the trash, leaving a session file behind. Stopping it first
+    // — and waiting for the process to be gone — keeps the two operations ordered.
+    const live = run.liveRunFor(target.dir)
+    if (live) {
+      ui.notify('该项目有正在运行的任务，先停止它', 'info')
+      await run.cancelAndWait(live.runId)
+    }
     await repos.deleteRepo(target)
   } finally {
     deletingRepo.value = false
@@ -315,11 +382,11 @@ watch(
 <template>
   <aside class="sidebar">
     <div class="sidebar-head">
-      <div class="brand">
+      <button type="button" class="brand" title="回到首页" aria-label="回到首页" @click="goHome()">
         <img class="brand-mark" :src="logoUrl" alt="" width="26" height="26" />
         <span>OcrLens</span>
         <span v-if="env.info?.ocrVersion" class="brand-version">v{{ env.info.ocrVersion }}</span>
-      </div>
+      </button>
 
       <div class="search">
         <input
@@ -434,6 +501,16 @@ watch(
                 {{ repo.name }}
               </span>
 
+              <!-- A repository with a task running says so even while collapsed:
+                   the point of per-session records is that a review belongs to its
+                   repository, not to whichever page happens to be open. -->
+              <span
+                v-if="run.isRepoBusy(repo.dir)"
+                class="run-pip"
+                title="有任务正在运行"
+                aria-label="有任务正在运行"
+              />
+
               <span v-if="repos.loadingSessions.includes(repos.repoKey(repo))" class="spinner" />
               <span v-else class="repo-count">{{ repo.sessionCount }}</span>
 
@@ -451,6 +528,43 @@ watch(
           </div>
 
           <div v-if="repos.isExpanded(repo)" class="sessions">
+            <!-- Runs that have no session row: the first second of a review, before
+                 the CLI's session id is known, and the rare run that never produced
+                 one at all. Both keep their log reachable. Kept outside the history
+                 block below, because a repository whose listing failed still has to
+                 show that its task is running. -->
+            <div
+              v-for="(rowless, rowlessIndex) in rowlessRuns(repo)"
+              :key="rowless.runId"
+              class="session-row pending-run"
+              :style="{ '--row-i': Math.min(rowlessIndex, 12) }"
+              :data-run-id="rowless.runId"
+              :title="run.isRunLive(rowless) ? '正在启动，日志在审查页面' : '这次运行没有生成会话记录，日志在审查页面'"
+              @click="repos.openRepo(repo)"
+            >
+              <span class="status-dot" :class="run.isRunLive(rowless) ? 'running' : runPhaseState(rowless.phase)" />
+              <div class="session-body">
+                <div class="session-title">
+                  <span class="session-name">{{ rowlessLabel(rowless) }}</span>
+                </div>
+                <div class="session-sub">
+                  {{ formatElapsedMs(rowless.elapsedMs) }} · {{ rowlessHint(rowless) }}
+                </div>
+              </div>
+              <div class="session-actions" @click.stop>
+                <span v-if="run.isRunLive(rowless)" class="spinner" title="正在运行" />
+                <button
+                  v-if="run.isRunLive(rowless)"
+                  class="icon-btn danger"
+                  :disabled="rowless.cancelling"
+                  :title="rowless.cancelling ? '正在中断…' : '停止这个任务'"
+                  @click="run.cancel(rowless.runId)"
+                >
+                  ■
+                </button>
+              </div>
+            </div>
+
             <div v-if="repos.sessionErrors[repos.repoKey(repo)]" class="empty" style="padding: 8px">
               <p class="muted">{{ repos.sessionErrors[repos.repoKey(repo)] }}</p>
             </div>
@@ -477,7 +591,7 @@ watch(
                 @drop.stop.prevent="onSessionDrop(repo)"
                 @dragend="onDragEnd()"
               >
-                <span class="status-dot" :class="sessionState(session)" />
+                <span class="status-dot" :class="liveOf(session) ? 'running' : sessionState(session)" />
 
                 <div class="session-body">
                   <!-- Renaming happens in place: the row is the only place the
@@ -497,25 +611,58 @@ watch(
 
                   <template v-else>
                     <div class="session-title">
-                      <span class="session-name" :class="{ untitled: !session.title }">
-                        {{ repos.sessionLabel(session) }}
+                      <span
+                        class="session-name"
+                        :class="{ untitled: !session.title && !liveOf(session) }"
+                      >
+                        {{ sessionTitle(session) }}
                       </span>
-                      <span class="session-findings" :class="{ has: session.total_comments > 0 }">
+                      <span
+                        v-if="!liveOf(session)"
+                        class="session-findings"
+                        :class="{ has: session.total_comments > 0 }"
+                      >
                         {{ session.total_comments }}
                       </span>
                     </div>
                     <div class="session-sub">
-                      <template v-if="session.title">{{ modeLabel(session.review_mode) }} · </template>
-                      {{ formatRelative(session.start_time) }} ·
-                      {{ stateLabel(sessionState(session)) }}
+                      <!-- A running session's own state says "skipped" until the
+                           run writes its first finding, so the run's clock is what
+                           the row reports while it is alive. -->
+                      <template v-if="liveOf(session)">
+                        {{ formatElapsedMs(liveOf(session)!.elapsedMs) }} ·
+                        {{ liveOf(session)!.cancelling ? '正在中断…' : '运行中' }}
+                      </template>
+                      <template v-else>
+                        <template v-if="session.title">{{ modeLabel(session.review_mode) }} · </template>
+                        {{ formatRelative(session.start_time) }} ·
+                        {{ stateLabel(sessionState(session)) }}
+                      </template>
                     </div>
                   </template>
                 </div>
 
                 <div v-if="editingId !== session.session_id" class="session-actions" @click.stop>
+                  <!-- A live run owns its row: no renaming, and above all no
+                       deleting the file the CLI is still writing to. -->
+                  <template v-if="liveOf(session)">
+                    <span class="spinner" title="正在运行" />
+                    <button
+                      class="icon-btn danger"
+                      :disabled="liveOf(session)!.cancelling"
+                      :title="liveOf(session)!.cancelling ? '正在中断…' : '停止这个任务'"
+                      @click="stopRun(session)"
+                    >
+                      ■
+                    </button>
+                  </template>
                   <!-- Busy covers rename, title generation and deletion, so the
                        label must not claim it is always a title job. -->
-                  <span v-if="repos.isBusy(session.session_id)" class="spinner" title="正在处理…" />
+                  <span
+                    v-else-if="repos.isBusy(session.session_id)"
+                    class="spinner"
+                    title="正在处理…"
+                  />
                   <template v-else>
                     <button class="icon-btn" title="重命名" @click="startRename(session)">✎</button>
                     <button class="icon-btn danger" title="删除该历史记录" @click="askDelete(repo, session)">
@@ -539,8 +686,11 @@ watch(
                 }}
               </button>
 
+              <!-- Only for a repository with neither a record nor a run: while a
+                   task is in flight the row above already says what is happening,
+                   and "no sessions yet" next to it reads as a contradiction. -->
               <div
-                v-if="!(repos.sessions[repos.repoKey(repo)] ?? []).length"
+                v-if="!(repos.sessions[repos.repoKey(repo)] ?? []).length && !rowlessRuns(repo).length"
                 class="empty"
                 style="padding: 10px"
               >

@@ -1,4 +1,5 @@
 import type {
+  ActiveRunView,
   AppSettings,
   CommentFilter,
   ConfigBackup,
@@ -24,6 +25,7 @@ import type {
   RunLogLine,
   RunProgress,
   RunResult,
+  RunSessionBound,
   SessionDetail,
   SessionListEntry,
   SessionTitle,
@@ -142,8 +144,12 @@ export interface OcrApiSurface {
   previewRun(options: ReviewOptions): Promise<IpcResult<Preview>>
   startRun(options: ReviewOptions): Promise<IpcResult<StartRunView>>
   cancelRun(runId: string): Promise<IpcResult<boolean>>
+  /** Runs still in flight in the main process; used to re-attach after a reload. */
+  listRuns(): Promise<IpcResult<ActiveRunView[]>>
   onRunLog(callback: (line: RunLogLine) => void): Unsubscribe
   onRunProgress(callback: (progress: RunProgress) => void): Unsubscribe
+  /** The session the run turned out to be writing, discovered while it ran. */
+  onRunSession(callback: (bound: RunSessionBound) => void): Unsubscribe
   onRunDone(callback: (result: RunResult) => void): Unsubscribe
 
   /* config */

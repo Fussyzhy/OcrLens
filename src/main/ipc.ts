@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import {
   IPC,
+  type ActiveRunView,
   type CommentFilter,
   type ExportMarkdownRequest,
   type ProviderModelsRequest,
@@ -27,7 +28,7 @@ import { listBranches, listCommits } from './git'
 import { forgetRepo, setRepoOrder, setSessionOrder } from './layout'
 import { fetchProviderModels, modelListEndpoint } from './models'
 import { addRepo, listRepos, removeRepo, renameRepo } from './repos'
-import { previewRun, startRun, type RunHandle } from './runner'
+import { previewRun, startRun, describeInvocation, type RunHandle } from './runner'
 import { deleteSession, listSessions, sessionComments, sessionDetail, trashRepoSessions } from './sessions'
 import { readSettings, writeSettings } from './settings'
 import { readSnippet, readWholeFile } from './source'
@@ -229,6 +230,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.startRun, async (options: ReviewOptions) => {
     const context = await ctx()
 
+    // One run per repository. Reviews of different repositories run side by side,
+    // but two runs in one repository would both write into the same session
+    // directory, making "which session belongs to this run" guesswork. The
+    // workbench disables its button for the same reason; this keeps the rule true
+    // even if a reload loses that state.
+    const busy = [...activeRuns.values()].find((entry) => entry.repoDir === options.repoDir)
+    if (busy) {
+      throw new Error('这个项目已经有一个任务在运行，等它结束或先停止它')
+    }
+
     // Events can fire before `startRun` returns, so buffer until we know the id.
     const earlyLogs: RunLogLine[] = []
     let earlyProgress: RunProgress | null = null
@@ -238,6 +249,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const created = startRun(context, options, {
       onLog: (line) => (run ? send(IPC.runLog, line) : earlyLogs.push(line)),
       onProgress: (progress) => (run ? send(IPC.runProgress, progress) : (earlyProgress = progress)),
+      // Cannot fire before the first poll (~700ms), by which time `run` is set, but
+      // the handler is written like its siblings so the invariant stays obvious.
+      onSession: (bound) => send(IPC.runSession, bound),
       onDone: (result) => {
         if (run) activeRuns.delete(run.runId)
         if (run) send(IPC.runDone, result)
@@ -261,6 +275,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     run.cancel()
     return true
   })
+
+  /**
+   * The runs still in flight.
+   *
+   * A renderer reload (the dev server's HMR, above all) forgets everything it knew
+   * about running tasks while the main process keeps them alive, so it asks for the
+   * list on startup and re-attaches instead of showing a task as finished.
+   */
+  handle(IPC.runList, async (): Promise<ActiveRunView[]> =>
+    [...activeRuns.values()].map((run) => ({
+      runId: run.runId,
+      repoDir: run.repoDir,
+      command: describeInvocation(run.invocation),
+      mode: run.mode,
+      startedAt: run.startedAt,
+      sessionId: run.sessionId
+    }))
+  )
 
   /* ---------------- config ---------------- */
 
