@@ -412,6 +412,77 @@ app.whenReady().then(async () => {
       settings
     )
 
+    /* 8. saving a channel through its own form.
+     *
+     * The IPC-level checks above build plain objects by hand, so they cannot see
+     * the one thing the form can get wrong: a payload assembled out of Vue refs.
+     * A `ref`'s value is a reactive proxy and the structured clone behind IPC
+     * refuses those ("An object could not be cloned."), which is a failure the user
+     * meets as a toast and the config file never hears about. */
+    const formFlow = await run(`(async () => {
+      const out = {};
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const clickIf = (el) => { if (el) el.click(); return Boolean(el); };
+
+      clickIf([...document.querySelectorAll('.sidebar-foot button')]
+        .find((b) => b.textContent.includes('⚙')));
+      await sleep(4000);
+
+      const row = [...document.querySelectorAll('.channel-row')]
+        .find((r) => r.querySelector('.channel-name')?.textContent.includes('probe-channel'));
+      out.rowFound = Boolean(row);
+      const edit = row && [...row.querySelectorAll('.channel-actions button')]
+        .find((b) => b.textContent.trim() === '编辑');
+      out.editClicked = clickIf(edit);
+      await sleep(600);
+
+      const form = row?.querySelector('form.channel-edit');
+      out.formFound = Boolean(form);
+      const submit = form?.querySelector('button[type=submit]');
+      out.submitLabel = submit?.textContent?.trim() ?? null;
+      out.submitEnabled = submit ? !submit.disabled : null;
+
+      // Tick one model through the form's own control, so the array it submits is
+      // built by the component rather than handed to it ready-made.
+      const manual = form?.querySelector('input[placeholder*="手动补充"]');
+      out.manualFound = Boolean(manual);
+      if (manual) {
+        manual.value = 'm9-manual';
+        manual.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(200);
+        clickIf([...form.querySelectorAll('button')].find((b) => b.textContent.trim() === '添加'));
+        await sleep(300);
+        out.picked = [...form.querySelectorAll('.field-hint')]
+          .map((h) => h.textContent.trim())
+          .find((text) => text.startsWith('将写入')) ?? null;
+      }
+
+      clickIf(submit);
+      await sleep(2000);
+      out.toasts = [...document.querySelectorAll('.toast')].map((t) => t.textContent.trim());
+      // Guarded like every other use of row above: an unguarded read here would
+      // throw inside this IIFE, reject the whole script, and turn a missing channel
+      // row into an opaque fatal stack instead of the two readable checks below.
+      out.editorClosed = row ? !row.querySelector('form.channel-edit') : null;
+      return out;
+    })()`)
+    results.formFlow = formFlow
+
+    const savedByForm = readJson(configPath).custom_providers?.['probe-channel'] ?? {}
+    results.savedByForm = savedByForm
+    check(
+      'the channel form saves the model list it submitted',
+      JSON.stringify(savedByForm.models) === JSON.stringify(['m9-manual']),
+      savedByForm
+    )
+    check(
+      'saving from the form reports success and closes the editor',
+      formFlow.editorClosed === true &&
+        formFlow.toasts?.some((text) => text.includes('已保存')) === true &&
+        formFlow.toasts?.some((text) => text.includes('could not be cloned')) !== true,
+      formFlow
+    )
+
     finish(0)
   } catch (err) {
     results.fatal = err && err.stack ? err.stack : String(err)

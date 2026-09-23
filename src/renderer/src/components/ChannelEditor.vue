@@ -154,7 +154,11 @@ async function submit(): Promise<void> {
     url: url.value.trim(),
     protocol: protocol.value,
     apiKey: apiKey.value.trim() || undefined,
-    models: selected.value
+    // Copied, not passed as-is: a `ref`'s value is a reactive proxy, and the
+    // structured clone behind IPC refuses proxies with "An object could not be
+    // cloned." — an array nested one level down is refused just the same, which is
+    // why every field that leaves this component has to be plain data.
+    models: [...selected.value]
   })
 }
 </script>
