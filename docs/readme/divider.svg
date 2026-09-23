@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 2" width="1200" height="2" role="presentation">
+  <!-- A section rule in the app's hairline colour, lit through the middle with the
+       accent, so the README keeps the same rhythm as the page (border-soft). -->
+  <defs>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0" />
+      <stop offset="0.18" stop-color="#ffffff" stop-opacity="0.14" />
+      <stop offset="0.5" stop-color="#2bde5e" stop-opacity="0.55" />
+      <stop offset="0.82" stop-color="#ffffff" stop-opacity="0.14" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="2" fill="url(#rule)" />
+</svg>

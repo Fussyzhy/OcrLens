@@ -315,31 +315,139 @@ app.whenReady().then(async () => {
         return 'clicked';
       })()`)
 
+    /* The mode pickers are this app's own dropdowns (components/SelectMenu.vue),
+     * not native selects: the OS draws a select's popup in its own colours, so it
+     * was the one control the theme could not reach. Driving one here from end to
+     * end is what keeps that replacement honest — the rest of the suite would pass
+     * just as happily if the control rendered nothing. */
     log(`range mode: ${await clickMode('分支区间')}`)
     await sleep(3000)
-    const rangeMode = await wc.executeJavaScript(`(() => {
-      const selects = [...document.querySelectorAll('select')];
-      return {
-        selectCount: selects.length,
-        values: selects.map(s => s.value),
-        optionCounts: selects.map(s => s.options.length),
-        sampleOptions: selects[0] ? [...selects[0].options].slice(0, 6).map(o => o.textContent.trim()) : []
+    const rangeMode = await wc.executeJavaScript(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const byLabel = (label) => [...document.querySelectorAll('.picker')].find(p =>
+        p.querySelector('[aria-label]')?.getAttribute('aria-label') === label);
+      const out = {
+        labels: [...document.querySelectorAll('.picker [aria-label]')].map(e => e.getAttribute('aria-label'))
       };
+
+      const from = byLabel('基准分支');
+      out.fromFound = !!from;
+      from?.querySelector('.picker-trigger')?.click();
+      await sleep(300);
+      const menu = document.querySelector('.picker-menu');
+      const rows = [...(menu?.querySelectorAll('.picker-item') ?? [])];
+      out.menuFound = !!menu;
+      out.rowCount = rows.length;
+      out.sampleRows = rows.slice(0, 6).map(r => r.textContent.trim());
+      if (menu) {
+        // The list has to be painted over the card it belongs to, and inside the
+        // window: the cards clip their overflow, and an ancestor with a finished
+        // animation is enough to move a fixed box somewhere else entirely.
+        const box = menu.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + Math.min(box.height / 2, 10));
+        out.paintedOnTop = !!(hit && menu.contains(hit));
+        out.insideWindow = box.top >= -1 && box.bottom <= window.innerHeight + 1;
+      }
+
+      out.firstRow = rows[1]?.textContent.trim() ?? null;
+      rows[1]?.click();
+      await sleep(300);
+      out.picked = from?.querySelector('.picker-value')?.textContent.trim() ?? null;
+      out.closedAfterPick = !document.querySelector('.picker-menu');
+      out.expandedAfterPick = from?.querySelector('[role="combobox"]')?.getAttribute('aria-expanded') ?? null;
+      return out;
     })()`)
     step('range-mode', rangeMode)
+    assert(rangeMode.fromFound === true, `the 分支区间 mode has no 基准分支 dropdown (${JSON.stringify(rangeMode)})`)
+    assert(
+      rangeMode.rowCount > 1 && rangeMode.sampleRows?.[0]?.includes('请选择') === true,
+      `the 基准分支 dropdown listed no branches (${JSON.stringify(rangeMode)})`
+    )
+    assert(
+      rangeMode.paintedOnTop === true && rangeMode.insideWindow === true,
+      `the branch list was not painted over its card inside the window (${JSON.stringify(rangeMode)})`
+    )
+    assert(
+      rangeMode.picked === rangeMode.firstRow && rangeMode.closedAfterPick === true,
+      `picking a branch did not land on it and close the list (${JSON.stringify(rangeMode)})`
+    )
     await shot(win, '10-range-mode')
 
     log(`commit mode: ${await clickMode('单提交')}`)
     await sleep(3000)
-    const commitMode = await wc.executeJavaScript(`(() => {
-      const select = document.querySelector('select');
-      return {
-        optionCount: select ? select.options.length : 0,
-        sampleOptions: select ? [...select.options].slice(1, 6).map(o => o.textContent.trim()) : []
-      };
+    const commitMode = await wc.executeJavaScript(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const commit = [...document.querySelectorAll('.picker')].find(p =>
+        p.querySelector('[aria-label]')?.getAttribute('aria-label') === '提交');
+      const out = { found: !!commit };
+      out.label = commit?.querySelector('.picker-value')?.textContent.trim() ?? null;
+      commit?.querySelector('.picker-trigger')?.click();
+      await sleep(300);
+      const rows = [...document.querySelectorAll('.picker-menu .picker-item')];
+      out.rowCount = rows.length;
+      out.sampleRows = rows.slice(1, 5).map(r => r.textContent.trim());
+      // A click anywhere else closes it; the list is teleported to the body, so
+      // "outside" has to include everything that is not the list or its control.
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      await sleep(250);
+      out.closedByOutsideClick = !document.querySelector('.picker-menu');
+      return out;
     })()`)
     step('commit-mode', commitMode)
+    assert(
+      commitMode.found === true && commitMode.rowCount > 1 && commitMode.closedByOutsideClick === true,
+      `the 提交 dropdown did not list commits or did not close on an outside click (${JSON.stringify(commitMode)})`
+    )
     await shot(win, '11-commit-mode')
+
+    /* The third picker sits in the folded 高级选项 panel, where nothing has been
+     * rendered before the summary is clicked — which is exactly the state a
+     * dropdown must survive, since it measures its control when it opens.
+     *
+     * 分批策略 belongs to 全量扫描: the other three modes show 关闭结果后过滤 in its
+     * place, so this stage enters that mode and the click below takes the page back
+     * to 工作区 for the preview. */
+    log(`scan mode: ${await clickMode('全量扫描')}`)
+    await sleep(2500)
+    const batchPicker = await wc.executeJavaScript(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const summary = document.querySelector('details.advanced summary');
+      summary?.click();
+      await sleep(500);
+      const picker = [...document.querySelectorAll('.picker')].find(p =>
+        p.querySelector('[aria-label]')?.getAttribute('aria-label') === '分批策略');
+      const out = { found: !!picker };
+      out.value = picker?.querySelector('.picker-value')?.textContent.trim() ?? null;
+      picker?.querySelector('.picker-trigger')?.click();
+      await sleep(300);
+      const rows = [...document.querySelectorAll('.picker-menu .picker-item')];
+      out.rowCount = rows.length;
+      out.sampleRows = rows.map(r => r.textContent.trim());
+      out.insideWindow = (() => {
+        const box = document.querySelector('.picker-menu')?.getBoundingClientRect();
+        return box ? box.top >= -1 && box.bottom <= window.innerHeight + 1 : null;
+      })();
+      picker?.querySelector('[role="combobox"]')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+      );
+      await sleep(250);
+      out.closedByEscape = !document.querySelector('.picker-menu');
+      // Folded again, and back on the default, so the preview below runs the same
+      // options it did before this stage existed.
+      out.valueUnchanged = picker?.querySelector('.picker-value')?.textContent.trim() === out.value;
+      summary?.click();
+      await sleep(300);
+      return out;
+    })()`)
+    step('batch-picker', batchPicker)
+    assert(
+      batchPicker.found === true &&
+        batchPicker.rowCount === 4 &&
+        batchPicker.insideWindow === true &&
+        batchPicker.closedByEscape === true &&
+        batchPicker.valueUnchanged === true,
+      `the 分批策略 dropdown in 高级选项 is not usable (${JSON.stringify(batchPicker)})`
+    )
 
     // Back to workspace so the preview stage below exercises the default path.
     log(`back to workspace: ${await clickMode('工作区')}`)
@@ -977,7 +1085,11 @@ app.whenReady().then(async () => {
         cards: [...document.querySelectorAll('.card-head')].map(e => e.innerText.replace(/\\s+/g, ' ').trim()),
         channelRows: channelRows.slice(0, 6).map(r => r.innerText.replace(/\\s+/g, ' ').trim()),
         currentProvider: text('.current-route .pill'),
-        modelInput: document.querySelector('input[list="model-options"]')?.value ?? null,
+        // The 当前模型 field is a text box plus a list toggle, found by the name on
+        // the box and the label on the button rather than by document order: the
+        // page also holds a protocol dropdown inside the create form.
+        modelInput: document.querySelector('.picker input[aria-label="当前模型"]')?.value ?? null,
+        modelPicker: Boolean(document.querySelector('.picker [aria-label="展开模型列表"]')),
         modelChips: [...document.querySelectorAll('.model-chip')].map(b => b.textContent.trim()),
         currentRowActions: currentRow
           ? [...currentRow.querySelectorAll('.channel-actions button')].map(b => b.textContent.trim())
@@ -1006,14 +1118,16 @@ app.whenReady().then(async () => {
       `the built-in toggle is not labelled as expected (${JSON.stringify(settings.builtinToggle)})`
     )
     // The clickable copy of the channel's catalogue was removed: "current model"
-    // has one control, and a channel's models are chosen in its own editor.
+    // has one control, and a channel's models are chosen in its own editor. That
+    // control is the picker, whose list is the active channel's own catalogue —
+    // checked by looking for both halves, since the field itself may be empty.
     assert(
       settings.modelChips.length === 0,
       `the removed 该渠道的模型 strip is still rendered (${JSON.stringify(settings.modelChips)})`
     )
     assert(
-      Boolean(settings.modelInput),
-      `the current-model field disappeared with the chip strip (${JSON.stringify(settings.modelInput)})`
+      Boolean(settings.modelInput !== null && settings.modelPicker),
+      `设置 has no 当前模型 field (a text box plus a list toggle) (${JSON.stringify(settings)})`
     )
 
     /* ---------------- 6b. the channel editor ----------------
@@ -1039,7 +1153,10 @@ app.whenReady().then(async () => {
       const form = rows[0]?.querySelector('.channel-edit') ?? null;
       out.formOpen = !!form;
       out.formFields = form
-        ? [...form.querySelectorAll('input, select')].map(el => el.type || el.tagName.toLowerCase())
+        ? [...form.querySelectorAll('input, select, .picker [role="combobox"]')]
+            .map(el => el.getAttribute('role') === 'combobox'
+              ? 'combobox'
+              : (el.type || el.tagName.toLowerCase()))
         : null;
       out.keyHint = form?.querySelector('.field-hint')?.textContent?.replace(/\\s+/g, ' ').trim() ?? null;
       out.currentModels = form
@@ -1091,7 +1208,9 @@ app.whenReady().then(async () => {
       out.createForm = createForm
         ? {
             hasNameField: !!createForm.querySelector('input[type="text"]'),
-            hasProtocolPicker: !!createForm.querySelector('select'),
+            // Named on purpose: a combobox without an accessible name is announced
+            // as "combo box" and nothing else.
+            hasProtocolPicker: !!createForm.querySelector('.picker [role="combobox"][aria-label="协议"]'),
             hasKeyField: !!createForm.querySelector('input[type="password"]'),
             fetchButton: !!([...createForm.querySelectorAll('button')]
               .find(b => b.textContent.includes('获取模型列表'))),

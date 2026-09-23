@@ -1190,10 +1190,6 @@ textarea {
   margin-bottom: 16px;
 }
 
-.field:last-child {
-  margin-bottom: 0;
-}
-
 .field-label {
   display: block;
   margin-bottom: 6px;
@@ -1534,20 +1530,20 @@ details.advanced[open] > summary {
  * Finding cards
  * ------------------------------------------------------------------ */
 
-/* `auto-fit` rather than a media-query switch to a fixed two columns: a fixed
- * pair looks wrong the moment a session has findings in only one file, because
- * the right half of a maximised pane stays empty — which is the exact complaint
- * this pass is fixing. With `auto-fit`, an odd or single group takes the whole
- * row and a second column appears only once there is something to put in it. */
+/* Explicitly one full-width column rather than the `auto-fit` grid this used to
+ * be: `auto-fit` produced a second column as soon as a track fit, so a session
+ * whose findings all sit in one file group still got split across two narrow
+ * ones, and the code context is worth more wide than side by side. */
 .findings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 18px;
   align-items: start;
 }
 
 .file-group {
   margin-bottom: 0;
+  width: 100%;
 }
 
 .file-head {
@@ -1651,7 +1647,7 @@ details.advanced[open] > summary {
 .finding-actions {
   display: flex;
   gap: 8px;
-  padding: 0 16px 14px;
+  padding: 8px 16px;
   flex-wrap: wrap;
 }
 
@@ -1773,10 +1769,196 @@ pre.code {
   background: var(--bg-elev-2);
 }
 
-/* `.row` bottom-aligns by default, which is right when a button sits beside an
- * input but wrong here: it would drop the 当前渠道 label below 当前模型's. */
+/* `.row` lays its children out as columns; here the two fields stack instead, so
+ * each one keeps its own label right above its own control. */
 .current-route .row {
-  align-items: flex-start;
+  display: block;
+}
+
+/* ---------------------------------------------------------------- *
+ * Dropdowns
+ *
+ * One control for every list in the app — the plain selects and the
+ * model picker — because a native `<select>` popup is drawn by the OS:
+ * on Windows it arrives in its own light grey, ignoring every token
+ * this app is built from. The chevron is the pair of gradients the old
+ * selects were drawn with, so the shape is unchanged.
+ *
+ * The list is `position: fixed` because the card a dropdown lives in
+ * clips its overflow, and it is teleported to the body because the
+ * finished entry animations leave a `transform` on those cards — which
+ * would make the card, not the viewport, the containing block. Both
+ * halves are explained where the placement happens:
+ * composables/useAnchoredMenu.ts.
+ * ---------------------------------------------------------------- */
+
+.picker {
+  position: relative;
+}
+
+/* The same box as an input, so a dropdown and a text field line up in a row. */
+.picker-trigger,
+.picker-field {
+  display: flex;
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.picker-trigger {
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-trigger:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.picker-trigger:focus-visible,
+.picker-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+.picker-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The closed control's text: one line, ellipsised rather than wrapped. */
+.picker-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An empty value is a real choice ("请选择…") but it is not a value yet. */
+.picker-value.empty {
+  color: var(--text-faint);
+}
+
+/* Square off the join: the input keeps the left corners, the toggle the right. */
+.picker-field input[type='text'] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.picker-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--bg-elev-2);
+  cursor: pointer;
+}
+
+.picker-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.picker-toggle:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* The two gradients side by side make one ▾. */
+.picker-chevron {
+  flex: none;
+  width: 10px;
+  height: 5px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-faint) 50%),
+    linear-gradient(135deg, var(--text-faint) 50%, transparent 50%);
+  background-position: 0 0, 5px 0;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* A dropdown inside a sentence (see the batch strategy in the workbench). */
+.picker.compact {
+  display: inline-flex;
+  width: auto;
+}
+
+.picker.compact .picker-trigger {
+  width: auto;
+}
+
+.picker-menu {
+  position: fixed;
+  z-index: 120;
+  padding: 4px;
+  overflow: auto;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-item:hover,
+.picker-item.active {
+  background: var(--bg-hover);
+}
+
+/* The value in use: the accent is reserved for what is current. */
+.picker-item.current {
+  color: var(--accent);
+}
+
+.picker-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-tick {
+  flex: none;
+}
+
+.picker-empty {
+  margin: 0;
+  padding: 8px 8px 6px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* A hint line with a control at its end (the model picker's link to the channel
+ * editor, the 应用 button beside the note about where models are stored). */
+.hint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .section-head {
@@ -2743,9 +2925,9 @@ pre.code {
   }
 }
 
-/* Wide window: use the second half of the pane instead of leaving it black.
- * The findings grid does this for itself (see `auto-fit` above); this is the
- * filter card, whose two toggle rows always exist and so can always pair up. */
+/* Wide window: use the second half of the pane instead of leaving it black. The
+ * findings list is deliberately one column (see above); this is the filter card,
+ * whose two toggle rows always exist and so can always pair up. */
 @media (min-width: 1700px) {
   .filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

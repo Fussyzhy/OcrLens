@@ -419,6 +419,29 @@ app.whenReady().then(async () => {
      * A `ref`'s value is a reactive proxy and the structured clone behind IPC
      * refuses those ("An object could not be cloned."), which is a failure the user
      * meets as a toast and the config file never hears about. */
+
+    /* 8a. seed the channel the picker checks need, before the settings page is
+     * opened further down — its config is read once, on mount. A catalogue of five
+     * with `p3` in use is the shape of the bug: a datalist offered only what was
+     * already in the box. */
+    const pickerSeed = await run(`window.ocr.saveProvider({
+      name: 'picker-channel', custom: true, url: 'http://127.0.0.1:9/v1',
+      protocol: 'openai', apiKey: 'sk-picker', models: ['p1', 'p2', 'p3', 'p4', 'p5']
+    }).then(r => r.ok ? r.data : { error: r.error })`)
+    await run(`window.ocr.setConfig('provider', 'picker-channel').then(r => r.ok ? r.data.ok : r.error)`)
+    await run(`window.ocr.setConfig('model', 'p3').then(r => r.ok ? r.data.ok : r.error)`)
+    results.pickerSeed = {
+      saved: pickerSeed.ok === true,
+      entry: readJson(configPath).custom_providers?.['picker-channel'] ?? null
+    }
+    check(
+      'the picker channel is seeded with five models and one in use',
+      results.pickerSeed.entry?.model === 'p3' &&
+        JSON.stringify(results.pickerSeed.entry?.models) ===
+          JSON.stringify(['p1', 'p2', 'p3', 'p4', 'p5']),
+      results.pickerSeed
+    )
+
     const formFlow = await run(`(async () => {
       const out = {};
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -482,6 +505,444 @@ app.whenReady().then(async () => {
         formFlow.toasts?.some((text) => text.includes('could not be cloned')) !== true,
       formFlow
     )
+
+    /* Page-side helpers, interpolated into the scripts below.
+     *
+     * `executeJavaScript` evaluates each call in its own scope, so sharing a helper
+     * means sharing its source rather than defining it twice and letting the two
+     * copies drift — which is how the navigation to 设置 and the reading of the
+     * hint line were duplicated three times before. */
+    const PAGE_HELPERS = `
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const gearButton = () => [...document.querySelectorAll('.sidebar-foot button')]
+        .find((b) => b.textContent.includes('⚙'));
+      /* Back to the home view and into 设置, so the settings page mounts against
+       * the configuration as it now stands. */
+      async function openSettings() {
+        document.querySelector('.brand').click();
+        await sleep(400);
+        gearButton().click();
+        await sleep(3000);
+      }
+      /* The 当前模型 control, found by the name on its own combobox: the page also
+       * holds a protocol dropdown, inside the (unopened) create form. */
+      const pickerField = () => [...document.querySelectorAll('.picker')]
+        .find((p) => p.querySelector('input[aria-label="当前模型"]')) ?? null;
+      const pickerHint = () => pickerField()?.parentElement?.querySelector('.hint-row')
+        ?.textContent?.replace(/\\s+/g, ' ').trim() ?? null;
+    `
+
+    /* 9. the 当前模型 picker.
+     *
+     * What it replaced was `<input list>` + `<datalist>`, and a datalist filters
+     * its own entries by what is already in the field — with `p3` in the box, a
+     * catalogue of five offered exactly `p3`, which is why the list looked out of
+     * step with the channel's editor. So the model in use is deliberately one of
+     * several, and the list is required to hold all of them.
+     *
+     * It is now the same control the page's plain dropdowns use (SelectMenu.vue,
+     * both on composables/useAnchoredMenu.ts), so this section also covers the
+     * keyboard path those two share — typing, the arrows, Enter — and the pieces
+     * of ARIA that make the control describable at all.
+     *
+     * The field also lives inside a card with `overflow: hidden`, so "the menu is
+     * painted on top of it" is a real check rather than a formality: an absolutely
+     * positioned list would have been cut off at the card's edge.
+     */
+    const picker = await run(`(async () => {
+      ${PAGE_HELPERS}
+      const out = {};
+      await openSettings();
+
+      const field = pickerField();
+      out.fieldFound = Boolean(field);
+      const input = field?.querySelector('input');
+      const toggle = field?.querySelector('.picker-toggle');
+      out.value = input?.value ?? null;
+      out.hint = pickerHint();
+      // Unnamed, a combobox is announced as an edit field and nothing else; the
+      // placeholder is gone the moment there is a value in the box.
+      out.accessibleName = input?.getAttribute('aria-label') ?? null;
+      // The list is not filtered by what is typed, so it must not claim to be
+      // autocomplete either.
+      out.advertisedAutocomplete = input?.getAttribute('aria-autocomplete') ?? null;
+
+      toggle?.click();
+      await sleep(300);
+      const menu = document.querySelector('.picker-menu');
+      const items = [...(menu?.querySelectorAll('.picker-item') ?? [])];
+      out.menuFound = Boolean(menu);
+      out.expanded = input?.getAttribute('aria-expanded') ?? null;
+      // Only the combobox may report the expanded state; a second copy on the
+      // chevron button announces it twice.
+      out.expandedSources = field ? field.querySelectorAll('[aria-expanded]').length : 0;
+      out.items = items.map((i) => i.querySelector('.picker-label').textContent.trim());
+      out.ticked = items.filter((i) => i.classList.contains('current'))
+        .map((i) => i.querySelector('.picker-label').textContent.trim());
+      out.ariaSelected = items.map((i) => i.getAttribute('aria-selected'));
+      out.activeDescendant = input?.getAttribute('aria-activedescendant') ?? null;
+      out.activeDescendantExists = Boolean(
+        out.activeDescendant && document.getElementById(out.activeDescendant)
+      );
+
+      // Whatever is painted at the list's own centre has to be the list.
+      const box = menu?.getBoundingClientRect();
+      const hit = box && document.elementFromPoint(box.left + box.width / 2, box.top + Math.min(box.height / 2, 12));
+      out.paintedOnTop = Boolean(hit && menu.contains(hit));
+      out.insideWindow = box ? box.top >= -1 && box.bottom <= window.innerHeight + 1 : null;
+
+      // Why a fixed-position box can still land outside the window: a transformed
+      // or filtered ancestor turns fixed into absolute. Kept as evidence, since the
+      // failure it explains is otherwise invisible from the DOM alone.
+      const rect = (el) => el ? { t: Math.round(el.getBoundingClientRect().top), b: Math.round(el.getBoundingClientRect().bottom), l: Math.round(el.getBoundingClientRect().left), w: Math.round(el.getBoundingClientRect().width), h: Math.round(el.getBoundingClientRect().height) } : null;
+      const chain = [];
+      for (let el = field; el; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        if (cs.transform !== 'none' || cs.filter !== 'none' || cs.backdropFilter !== 'none' || cs.perspective !== 'none' || cs.willChange !== 'auto') {
+          chain.push({ el: String(el.className || el.tagName), transform: cs.transform, filter: cs.filter, backdrop: cs.backdropFilter, willChange: cs.willChange });
+        }
+      }
+      const menuCss = menu ? getComputedStyle(menu) : null;
+      out.boxes = {
+        field: rect(field), menu: rect(menu), innerHeight: window.innerHeight,
+        menuCss: menuCss ? { position: menuCss.position, top: menuCss.top, bottom: menuCss.bottom, left: menuCss.left, maxHeight: menuCss.maxHeight } : null,
+        containerChain: chain
+      };
+
+      /* Typing, with the list open: the highlight has to follow the text.
+       *
+       * The list is deliberately not filtered by the box, so a highlight left on
+       * the previously selected model would make Enter replace a name the user
+       * has just typed with an unrelated one. */
+      const type = async (text) => {
+        input.value = text;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(150);
+      };
+      const activeLabel = () => document.querySelector('.picker-menu .picker-item.active')
+        ?.querySelector('.picker-label')?.textContent.trim() ?? null;
+
+      await type('p9-typed');
+      out.typedRows = [...document.querySelectorAll('.picker-menu .picker-item')]
+        .map((i) => i.querySelector('.picker-label').textContent.trim());
+      out.typedHighlight = activeLabel();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(250);
+      out.afterTypedEnter = input.value;
+      out.closedAfterTypedEnter = !document.querySelector('.picker-menu');
+
+      /* The arrows, then Enter: an explicit choice still wins. */
+      await type('p1');
+      // The first arrow opens the list (on a text box the arrows are needed to
+      // walk the text until then), the second one moves the highlight.
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      await sleep(200);
+      out.openedByArrow = Boolean(document.querySelector('.picker-menu'));
+      out.highlightAtOpen = activeLabel();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      await sleep(150);
+      out.arrowHighlight = activeLabel();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(250);
+      out.afterArrowEnter = input.value;
+
+      toggle?.click();
+      await sleep(250);
+      out.reopened = Boolean(document.querySelector('.picker-menu'));
+      input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(200);
+      out.closedByEscape = !document.querySelector('.picker-menu');
+
+      toggle?.click();
+      await sleep(200);
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      await sleep(200);
+      out.closedByOutside = !document.querySelector('.picker-menu');
+
+      // The list is re-queried here on purpose: the nodes captured when it first
+      // opened were replaced by every open and close since.
+      toggle?.click();
+      await sleep(250);
+      const fresh = [...document.querySelectorAll('.picker-menu .picker-item')];
+      fresh[fresh.length - 1]?.click();
+      await sleep(300);
+      out.afterPick = input?.value ?? null;
+      out.closedAfterPick = !document.querySelector('.picker-menu');
+      out.expandedAfterPick = input?.getAttribute('aria-expanded') ?? null;
+
+      // 应用 is what actually stores it: on the channel, not only on screen.
+      [...document.querySelectorAll('.current-route button')]
+        .find((b) => b.textContent.trim() === '应用')?.click();
+      await sleep(1800);
+      out.toasts = [...document.querySelectorAll('.toast')].map((t) => t.textContent.trim());
+      return out;
+    })()`)
+    results.picker = picker
+
+    check('the model picker is on the settings page', picker.fieldFound === true, picker)
+    check(
+      'it starts on the model in use',
+      picker.value === 'p3' && JSON.stringify(picker.ticked) === JSON.stringify(['p3']),
+      { value: picker.value, ticked: picker.ticked }
+    )
+    check(
+      'the list holds the whole catalogue, not just the current model',
+      JSON.stringify(picker.items) === JSON.stringify(['p1', 'p2', 'p3', 'p4', 'p5']),
+      picker.items
+    )
+    check(
+      'the list marks exactly the model in use',
+      JSON.stringify(picker.ariaSelected) === JSON.stringify(['false', 'false', 'true', 'false', 'false']),
+      picker.ariaSelected
+    )
+    check(
+      'the control is named, and announces only one expanded state',
+      picker.accessibleName === '当前模型' &&
+        picker.expandedSources === 1 &&
+        picker.expanded === 'true' &&
+        picker.advertisedAutocomplete === null,
+      {
+        accessibleName: picker.accessibleName,
+        expandedSources: picker.expandedSources,
+        expanded: picker.expanded,
+        advertisedAutocomplete: picker.advertisedAutocomplete
+      }
+    )
+    check(
+      'the highlight is pointed at by aria-activedescendant',
+      picker.activeDescendantExists === true && picker.activeDescendant.endsWith('-option-2'),
+      { activeDescendant: picker.activeDescendant }
+    )
+    check(
+      'the list is painted on top of the clipping card, inside the window',
+      picker.paintedOnTop === true && picker.insideWindow === true,
+      { paintedOnTop: picker.paintedOnTop, insideWindow: picker.insideWindow }
+    )
+    check(
+      'typing a name outside the catalogue and pressing Enter keeps it',
+      picker.typedHighlight === 'p9-typed' &&
+        picker.afterTypedEnter === 'p9-typed' &&
+        picker.closedAfterTypedEnter === true,
+      {
+        typedRows: picker.typedRows,
+        typedHighlight: picker.typedHighlight,
+        afterTypedEnter: picker.afterTypedEnter
+      }
+    )
+    check(
+      'the arrow keys move the highlight and Enter takes it',
+      picker.openedByArrow === true &&
+        picker.highlightAtOpen === 'p1' &&
+        picker.arrowHighlight === 'p2' &&
+        picker.afterArrowEnter === 'p2',
+      {
+        openedByArrow: picker.openedByArrow,
+        highlightAtOpen: picker.highlightAtOpen,
+        arrowHighlight: picker.arrowHighlight,
+        afterArrowEnter: picker.afterArrowEnter
+      }
+    )
+    check(
+      'picking a model fills the field and closes the list',
+      picker.afterPick === 'p5' &&
+        picker.closedAfterPick === true &&
+        picker.expandedAfterPick === 'false',
+      {
+        afterPick: picker.afterPick,
+        closedAfterPick: picker.closedAfterPick,
+        expandedAfterPick: picker.expandedAfterPick
+      }
+    )
+    check(
+      'Escape and a click outside both close it',
+      picker.reopened === true && picker.closedByEscape === true && picker.closedByOutside === true,
+      picker
+    )
+
+    const afterApply = readJson(configPath).custom_providers?.['picker-channel'] ?? {}
+    results.pickerAfterApply = afterApply
+    check(
+      '应用 stores the picked model on the active channel',
+      afterApply.model === 'p5' &&
+        picker.toasts?.some((text) => text.includes('已设置模型 p5')) === true,
+      { model: afterApply.model, toasts: picker.toasts }
+    )
+    check(
+      'the hint counts the catalogue it offers',
+      typeof picker.hint === 'string' && picker.hint.includes('可选 5 个模型'),
+      picker.hint
+    )
+
+    /* 9a. two pictures of the control, for a human to look at: the open list, and
+     * what it says when the channel has no catalogue. The rest of this probe can
+     * only assert the mechanics — whether it looks like the rest of the page is not
+     * something a DOM query can answer. */
+    const shot = async (name) => {
+      try {
+        const box = await run(`(async () => {
+          ${PAGE_HELPERS}
+          const field = pickerField();
+          field?.scrollIntoView({ block: 'center' });
+          await sleep(500);
+          if (!document.querySelector('.picker-menu')) field?.querySelector('.picker-toggle')?.click();
+          await sleep(500);
+          const menu = document.querySelector('.picker-menu');
+          const rects = [field, menu].filter(Boolean).map((el) => el.getBoundingClientRect());
+          if (!rects.length) return null;
+          const left = Math.min(...rects.map((r) => r.left));
+          const top = Math.min(...rects.map((r) => r.top));
+          const right = Math.max(...rects.map((r) => r.right));
+          const bottom = Math.max(...rects.map((r) => r.bottom));
+          const pad = 24;
+          return {
+            x: Math.max(0, Math.round(left - pad)),
+            y: Math.max(0, Math.round(top - pad)),
+            width: Math.round(right - left + pad * 2),
+            height: Math.round(bottom - top + pad * 2)
+          };
+        })()`)
+        // The probe's window is blurred and click-through, so Chromium paints it
+        // rarely: without this the capture comes back as the frame from before the
+        // menu was opened.
+        wc.invalidate()
+        await sleep(500)
+        const image = await wc.capturePage(box ?? undefined)
+        fs.mkdirSync(path.join(__dirname, '..', 'smoke-out'), { recursive: true })
+        fs.writeFileSync(path.join(__dirname, '..', 'smoke-out', name), image.toPNG())
+      } catch (err) {
+        // A picture is a convenience, not a rail: a window that has already gone
+        // away must not turn into a fatal result for the whole probe.
+        console.log(`shot ${name}: FAILED — ${err?.message ?? err}`)
+      }
+    }
+    await shot('picker-open.png')
+
+    /* 9b. a channel with no catalogue at all: the list says so and points at the
+     * editor, rather than opening as an empty box. */
+    await run(`window.ocr.saveProvider({
+      name: 'empty-channel', custom: true, url: 'http://127.0.0.1:9/v1', protocol: 'openai', models: []
+    }).then(r => r.ok ? r.data.ok : r.error)`)
+    await run(`window.ocr.setConfig('provider', 'empty-channel').then(r => r.ok ? r.data.ok : r.error)`)
+
+    const emptyPicker = await run(`(async () => {
+      ${PAGE_HELPERS}
+      const out = {};
+      await openSettings();
+
+      const field = pickerField();
+      out.hint = pickerHint();
+      const link = field?.parentElement?.querySelector('.hint-row .link-btn') ?? null;
+      out.linkFound = Boolean(link);
+      field?.querySelector('.picker-toggle')?.click();
+      await sleep(300);
+      out.items = [...document.querySelectorAll('.picker-menu .picker-item')].length;
+      out.note = document.querySelector('.picker-empty')?.textContent
+        ?.replace(/\\s+/g, ' ').trim() ?? null;
+
+      /* Scoped to the channel's own row: the create form below is the same
+       * component and sits in the document the whole time, so an unscoped
+       * form.channel-edit query passes whether or not the link did anything. */
+      const rowOf = () => [...document.querySelectorAll('.channel-row')].find((r) =>
+        r.querySelector('.channel-name')?.textContent?.includes('empty-channel')) ?? null;
+      out.rowFound = Boolean(rowOf());
+      link?.click();
+      await sleep(600);
+      out.editorOpened = Boolean(rowOf()?.querySelector('form.channel-edit'));
+      out.editorChannel = rowOf()?.querySelector('form.channel-edit .mono')?.textContent?.trim() ?? null;
+      // The link promises to take the user somewhere; clicking it again must not
+      // undo that by toggling the editor shut.
+      link?.click();
+      await sleep(600);
+      out.editorStillOpen = Boolean(rowOf()?.querySelector('form.channel-edit'));
+      return out;
+    })()`)
+    results.emptyPicker = emptyPicker
+
+    check(
+      'a channel without a catalogue says so instead of opening an empty list',
+      emptyPicker.items === 0 &&
+        typeof emptyPicker.note === 'string' &&
+        emptyPicker.note.includes('还没有模型目录') &&
+        typeof emptyPicker.hint === 'string' &&
+        emptyPicker.hint.includes('还没有模型目录'),
+      emptyPicker
+    )
+    check(
+      'and the hint opens that channel for editing',
+      emptyPicker.linkFound === true &&
+        emptyPicker.rowFound === true &&
+        emptyPicker.editorOpened === true &&
+        emptyPicker.editorChannel === 'empty-channel',
+      emptyPicker
+    )
+    check(
+      'clicking the link again leaves the editor open',
+      emptyPicker.editorStillOpen === true,
+      { editorOpened: emptyPicker.editorOpened, editorStillOpen: emptyPicker.editorStillOpen }
+    )
+    await shot('picker-empty.png')
+
+    /* 10. the window's close button, and the tray.
+     *
+     * Close hides the window instead of ending the process — a review runs for
+     * minutes inside `ocr` and the window is only a view of it — and quitting is
+     * the tray menu's own exit. None of that needs the tray object itself to be
+     * observable: the decision shows up on the window's `close` event, where this
+     * listener runs *after* the app's and can read `defaultPrevented`, and the
+     * quitting flag is set from `before-quit`, which every real quit path goes
+     * through (`app.quit()` — what the menu item calls — included).
+     *
+     * Last section on purpose: it leaves the window hidden.
+     */
+    const trayWin = BrowserWindow.getAllWindows()[0]
+    const closeDecisions = []
+    trayWin.on('close', (event) => {
+      closeDecisions.push(event.defaultPrevented)
+      // Final say, whichever way the app decided: the probe needs the window to
+      // survive this to keep reporting.
+      event.preventDefault()
+    })
+
+    trayWin.close()
+    await sleep(400)
+    const hidOnClose = {
+      vetoed: closeDecisions[0] === true,
+      hidden: !trayWin.isVisible(),
+      stillThere: !trayWin.isDestroyed()
+    }
+    trayWin.show()
+    await sleep(300)
+    hidOnClose.shownAgain = trayWin.isVisible()
+
+    // The quitting path: set the flag the way a real quit does, then close again.
+    // A veto here would leave the process running with no window to show.
+    app.emit('before-quit')
+    trayWin.close()
+    await sleep(300)
+    const quitPath = { vetoed: closeDecisions[1] === true }
+
+    // The tray icon is loaded from the built bundle's own directory, so a build
+    // that stopped copying `resources` next to it gets a tray with no picture.
+    const trayIcon = path.join(__dirname, '..', 'resources', 'icon.png')
+    const iconThere = fs.existsSync(trayIcon)
+
+    results.tray = { ...hidOnClose, quitVetoed: quitPath.vetoed, iconThere, closeDecisions }
+
+    check(
+      'the close button hides the window instead of ending the app',
+      hidOnClose.vetoed === true &&
+        hidOnClose.hidden === true &&
+        hidOnClose.stillThere === true &&
+        hidOnClose.shownAgain === true,
+      hidOnClose
+    )
+    check('the window can be brought back from the tray', hidOnClose.shownAgain === true, hidOnClose)
+    check(
+      'quitting is no longer vetoed by the close handler',
+      quitPath.vetoed === false,
+      { closeDecisions, quitVetoed: quitPath.vetoed }
+    )
+    check('the tray has an icon to show', iconThere === true, { trayIcon })
 
     finish(0)
   } catch (err) {

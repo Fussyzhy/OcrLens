@@ -2,6 +2,7 @@
 import type { ConfigBackup, OcrConfigView, ProviderInfo, ProviderSaveRequest } from '@shared/types'
 import { computed, onMounted, ref } from 'vue'
 import ChannelEditor from '../components/ChannelEditor.vue'
+import ModelPicker from '../components/ModelPicker.vue'
 import { useEnvStore } from '../stores/env'
 import { useRepoStore } from '../stores/repos'
 import { useUiStore } from '../stores/ui'
@@ -27,6 +28,22 @@ const busy = ref(false)
 const gitOverrideDraft = ref('')
 
 const activeProvider = computed(() => config.value?.providers.find((p) => p.active) ?? null)
+
+/**
+ * The models the picker offers: the active channel's catalogue, exactly the list
+ * its editor ticks. Reading it from anywhere else is how the picker ended up
+ * showing a different set than the channel it belongs to.
+ */
+const modelCatalogue = computed(() => activeProvider.value?.models ?? [])
+
+/** Says where the list above came from, and what to do when there is none. */
+const catalogueHint = computed(() => {
+  const provider = activeProvider.value
+  if (!provider) return '先在下面选择一个渠道'
+  const count = modelCatalogue.value.length
+  if (!count) return `渠道 ${provider.name} 还没有模型目录，可直接输入模型名`
+  return `可选 ${count} 个模型，来自渠道 ${provider.name}`
+})
 
 /**
  * The channels worth a permanent row: everything the user created, plus any
@@ -142,6 +159,18 @@ const editTarget = ref<ProviderInfo | null>(null)
 /** Clicking 编辑 on the open row closes it again, like any other disclosure. */
 function beginEdit(provider: ProviderInfo): void {
   editTarget.value = editTarget.value?.name === provider.name ? null : provider
+}
+
+/**
+ * Opens a channel's editor without the toggle behaviour.
+ *
+ * For links that *promise* to take the user somewhere ("去渠道里添加"), a second
+ * click must not undo the first: with `beginEdit`, clicking such a link while that
+ * channel's editor happened to be open closed it instead, which is the opposite of
+ * what the sentence says.
+ */
+function openEdit(provider: ProviderInfo): void {
+  editTarget.value = provider
 }
 
 /* The create form lives in a `<details>`. Cancelling clears it by remounting the
@@ -397,29 +426,24 @@ async function reprobe(): Promise<void> {
 
               <div class="field">
                 <label class="field-label">当前模型</label>
-                <div class="inline">
-                  <input
-                    v-model="config.model"
-                    type="text"
-                    list="model-options"
-                    spellcheck="false"
-                  />
-                  <button class="btn sm" :disabled="busy" @click="applyModel">应用</button>
-                </div>
-                <datalist id="model-options">
-                  <option
-                    v-for="name in activeProvider?.models ?? []"
-                    :key="name"
-                    :value="name"
-                  />
-                </datalist>
+                <ModelPicker v-model="config.model" :models="modelCatalogue" label="当前模型" />
+                <p class="field-hint hint-row">
+                  <span>{{ catalogueHint }}</span>
+                  <button
+                    v-if="activeProvider && !modelCatalogue.length"
+                    type="button"
+                    class="link-btn"
+                    @click="openEdit(activeProvider)"
+                  >
+                    去渠道里添加
+                  </button>
+                </p>
               </div>
             </div>
 
-            <!-- The channel's model catalogue is edited where the channel is
-                 (see the 渠道 rows below): offering it here as a second, clickable
-                 copy of the same list made this strip look like it had two
-                 competing "current model" controls. -->
+            <!-- The catalogue offered here is the active channel's own, read-only:
+                 editing it stays where the channel is (see the 渠道 rows below).
+                 One source, so the picker and the editor cannot drift apart. -->
             <div class="inline">
               <button class="btn sm" :disabled="testing" @click="runTest">
                 <span v-if="testing" class="spinner" />
@@ -430,9 +454,13 @@ async function reprobe(): Promise<void> {
 
             <!-- Where a switched model lands is invisible in config.json (it goes
                  into the active channel's own entry), so say it once here. -->
-            <p class="field-hint">
-              模型和密钥都记在渠道自己名下：切换渠道时会各自带出，不会互相覆盖。
-            </p>
+            <div class="hint-row" style="margin-top: 6px">
+              <p class="field-hint">
+                模型和密钥都记在渠道自己名下：切换渠道时会各自带出，不会互相覆盖。
+              </p>
+              <button class="btn sm right" :disabled="busy" @click="applyModel">应用</button>
+            </div>
+
           </div>
           <div
             v-if="testOutput"

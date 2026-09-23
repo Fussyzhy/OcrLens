@@ -3,6 +3,7 @@ import { app, BrowserWindow, shell } from 'electron'
 import { IPC } from '@shared/types'
 import { ensureEnv } from './env'
 import { cancelAllRuns, registerIpc } from './ipc'
+import { destroyTray, installCloseToTray, installTray, markQuitting } from './tray'
 
 /**
  * Application bootstrap.
@@ -38,7 +39,12 @@ function createWindow(): void {
       // only calls the typed surface exposed by the preload bridge.
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      // Closing the window hides it rather than ending the process (see the tray),
+      // and the renderer keeps working while hidden: it owns the run log and the
+      // title queue, so a throttled background page would stall them until the
+      // window came back.
+      backgroundThrottling: false
     }
   })
 
@@ -85,17 +91,34 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  // Close means "put it away": the tray owns the real exit. See main/tray.ts.
+  installCloseToTray(mainWindow)
 }
 
 app.whenReady().then(() => {
   registerIpc(() => mainWindow)
   createWindow()
+  // Created after the window so the tray's own 打开 has something to show; it
+  // survives the window being hidden all day.
+  installTray(
+    () => mainWindow,
+    () => createWindow()
+  )
 
   // Warm the cache so the renderer's first env:info resolves immediately.
   void ensureEnv().catch((err) => console.error('environment probe failed:', err))
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    const existing = BrowserWindow.getAllWindows()[0]
+    if (!existing) {
+      createWindow()
+      return
+    }
+    // Windows can activate a hidden window (a second launch, the tray), and it
+    // must not come back as a taskbar entry with no window behind it.
+    existing.show()
+    existing.focus()
   })
 })
 
@@ -106,5 +129,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Set before anything else: the window's close handler consults it, and this is
+  // the one place every quit path — tray, Alt+F4, OS shutdown — passes through.
+  markQuitting()
+  destroyTray()
   cancelAllRuns()
 })

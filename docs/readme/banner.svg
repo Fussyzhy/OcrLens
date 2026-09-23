@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-label="OcrLens — 代码审查镜">
+  <!--
+    The README's header, drawn with the app's own palette: black ground
+    (#000), the sidebar's #0a0a0a inside the lens, the #111 card, the
+    green accent (#2bde5e / #31ff75) and a severity stripe from the
+    findings list. The dot grid and the diagonal light bands echo
+    BackgroundFX.vue, which is what the window actually looks like.
+
+    Pure vector on purpose: GitHub does not load a referenced image from
+    inside an SVG, so the lens is drawn rather than embedded.
+  -->
+  <defs>
+    <radialGradient id="glow" cx="0.5" cy="0" r="0.95">
+      <stop offset="0" stop-color="#2bde5e" stop-opacity="0.20" />
+      <stop offset="0.55" stop-color="#2bde5e" stop-opacity="0.05" />
+      <stop offset="1" stop-color="#2bde5e" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#31ff75" stop-opacity="0.95" />
+      <stop offset="1" stop-color="#2bde5e" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="stripe" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff5f56" />
+      <stop offset="1" stop-color="#ff9f43" />
+    </linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="1.2" cy="1.2" r="1.1" fill="#ffffff" fill-opacity="0.045" />
+    </pattern>
+    <clipPath id="card">
+      <rect width="1280" height="320" rx="18" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#card)">
+    <rect width="1280" height="320" fill="#000000" />
+    <rect width="1280" height="320" fill="url(#dots)" />
+    <rect width="1280" height="320" fill="url(#glow)" />
+    <!-- The ambient light band, crossing the way it does behind the UI. -->
+    <path d="M -60 320 L 300 0 L 372 0 L 12 320 Z" fill="#ffffff" fill-opacity="0.018" />
+    <path d="M 150 320 L 510 0 L 552 0 L 192 320 Z" fill="#2bde5e" fill-opacity="0.03" />
+  </g>
+  <rect x="0.5" y="0.5" width="1279" height="319" rx="18" fill="none" stroke="#ffffff" stroke-opacity="0.16" />
+
+  <!-- The mark: a lens with the accent as an arc and an aperture dot. -->
+  <g transform="translate(96,92)">
+    <circle cx="68" cy="68" r="60" fill="#0a0a0a" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5" />
+    <path d="M 68 8 A 60 60 0 0 1 128 68" fill="none" stroke="#2bde5e" stroke-width="4" stroke-linecap="round" />
+    <circle cx="68" cy="68" r="28" fill="none" stroke="#2bde5e" stroke-opacity="0.42" stroke-width="2.5" />
+    <circle cx="68" cy="68" r="8.5" fill="#31ff75" />
+  </g>
+
+  <text x="258" y="146" font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="70" font-weight="700" fill="#ffffff" letter-spacing="0.5">OcrLens</text>
+  <text x="260" y="190" font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif" font-size="22" fill="#ffffff" fill-opacity="0.62">代码审查镜 · open-code-review（ocr）的桌面可视化外壳</text>
+  <rect x="260" y="206" width="160" height="3" rx="1.5" fill="url(#rule)" />
+
+  <g font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="15">
+    <g fill="#ffffff" fill-opacity="0.72">
+      <rect x="260" y="236" width="127" height="32" rx="16" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12" />
+      <text x="323.5" y="257" text-anchor="middle">Electron 44</text>
+
+      <rect x="399" y="236" width="91" height="32" rx="16" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12" />
+      <text x="444.5" y="257" text-anchor="middle">Vue 3.5</text>
+
+      <rect x="502" y="236" width="181" height="32" rx="16" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12" />
+      <text x="592.5" y="257" text-anchor="middle">TypeScript strict</text>
+
+      <rect x="695" y="236" width="64" height="32" rx="16" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12" />
+      <text x="727" y="257" text-anchor="middle">yarn</text>
+    </g>
+  </g>
+
+  <!-- A finding card, as the results page draws it: severity stripe, file, code. -->
+  <g transform="translate(892,80)">
+    <rect width="304" height="160" rx="12" fill="#111111" stroke="#ffffff" stroke-opacity="0.14" />
+    <rect x="0" y="0" width="3" height="160" rx="1.5" fill="url(#stripe)" />
+    <circle cx="24" cy="27" r="4" fill="#2bde5e" />
+    <text x="38" y="32" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="14" fill="#ffffff" fill-opacity="0.78">src/main/runner.ts</text>
+    <rect x="20" y="52" width="196" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.10" />
+    <rect x="32" y="70" width="244" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.07" />
+    <rect x="32" y="88" width="164" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.07" />
+    <rect x="20" y="110" width="216" height="7" rx="3.5" fill="#2bde5e" fill-opacity="0.28" />
+    <rect x="32" y="128" width="140" height="7" rx="3.5" fill="#2bde5e" fill-opacity="0.16" />
+  </g>
+</svg>

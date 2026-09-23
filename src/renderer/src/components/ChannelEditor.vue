@@ -2,6 +2,8 @@
 import { isValidConfigKey } from '@shared/config-key'
 import type { ProviderInfo, ProviderModelsRequest, ProviderSaveRequest } from '@shared/types'
 import { computed, ref } from 'vue'
+import SelectMenu from './SelectMenu.vue'
+import type { SelectOption } from '../utils/select'
 
 /**
  * The add / edit form for one channel.
@@ -47,16 +49,17 @@ const candidates = ref<string[]>([...(props.provider?.models ?? [])])
 const PROTOCOLS = ['openai', 'openai-responses', 'anthropic', 'anthropic-bedrock']
 
 /**
- * The protocol picker's options, including whatever this channel is set to.
+ * The protocol picker's rows, including whatever this channel is set to.
  *
  * `LlmProtocol` deliberately allows values this list does not know (`ocr` adds
- * protocols over time), and a `<select>` whose value matches no option renders
- * blank — which would show a channel's protocol as unset, inviting the user to
- * overwrite it with something arbitrary.
+ * protocols over time). Such a value is shown either way — a dropdown falls back to
+ * the stored value when the list does not mention it — but it is added here as well
+ * so that it is also a row the user can come back to after trying another one.
  */
-const protocolOptions = computed(() => {
+const protocolOptionList = computed<SelectOption[]>(() => {
   const current = protocol.value.trim()
-  return current && !PROTOCOLS.includes(current) ? [current, ...PROTOCOLS] : PROTOCOLS
+  const names = current && !PROTOCOLS.includes(current) ? [current, ...PROTOCOLS] : PROTOCOLS
+  return names.map((item) => ({ value: item, label: item }))
 })
 
 /**
@@ -184,9 +187,7 @@ async function submit(): Promise<void> {
 
       <div class="field">
         <label class="field-label">协议</label>
-        <select v-model="protocol">
-          <option v-for="item in protocolOptions" :key="item" :value="item">{{ item }}</option>
-        </select>
+        <SelectMenu v-model="protocol" :options="protocolOptionList" label="协议" />
       </div>
     </div>
 

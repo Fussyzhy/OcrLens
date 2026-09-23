@@ -361,9 +361,9 @@ async function copyMarkdown(): Promise<void> {
       </div>
 
       <template v-else>
-        <!-- A grid rather than a plain stack: at wide widths the media query in
-             styles.css splits this into two columns so a maximised window is
-             used for findings instead of leaving half the pane empty. -->
+        <!-- One full-width column (see .findings-grid in styles.css): the code
+             context beside a finding is what needs the room, so the grid is not
+             split into two as soon as the pane is wide. -->
         <div class="findings-grid">
           <div v-for="group in results.groups" :key="group.path" class="file-group">
             <div class="file-head" @click="results.toggleFile(group.path)">

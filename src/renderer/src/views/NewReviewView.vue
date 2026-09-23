@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { GitRef, ReviewMode } from '@shared/types'
 import { computed, onMounted, watch } from 'vue'
+import SelectMenu from '../components/SelectMenu.vue'
 import { useEnvStore } from '../stores/env'
 import { useRepoStore } from '../stores/repos'
 import { useRunStore } from '../stores/run'
 import { excludeReasonLabel, formatDateFromMs, formatDurationMs } from '../utils/format'
+import type { SelectOption } from '../utils/select'
 
 const env = useEnvStore()
 const repos = useRepoStore()
@@ -17,6 +19,36 @@ function branchLabel(branch: GitRef): string {
   const suffix = branch.current ? '（当前）' : formatDateFromMs(branch.committedAt)
   return suffix ? `${branch.name} — ${suffix}` : branch.name
 }
+
+/* The dropdowns' rows. The empty value is a real choice in each of them — "pick
+ * one", "use the configured default" — which is why it is spelled out here rather
+ * than implied by a placeholder. */
+const branchOptions = computed<SelectOption[]>(() => [
+  { value: '', label: '请选择…' },
+  ...run.branches.map((branch) => ({ value: branch.name, label: branchLabel(branch) }))
+])
+
+const commitOptions = computed<SelectOption[]>(() => [
+  { value: '', label: '请选择…' },
+  ...run.commits.map((item) => ({
+    value: item.hash,
+    label: `${item.short} · ${item.subject} — ${item.meta}`
+  }))
+])
+
+const effortOptions: SelectOption[] = [
+  { value: '', label: '使用配置默认' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' }
+]
+
+const batchOptions: SelectOption[] = [
+  { value: '', label: '默认' },
+  { value: 'none', label: 'none' },
+  { value: 'by-language', label: 'by-language' },
+  { value: 'by-directory', label: 'by-directory' }
+]
 
 const MODES: { value: ReviewMode; title: string; desc: string }[] = [
   { value: 'workspace', title: '工作区', desc: '暂存 + 未暂存 + 未跟踪的改动' },
@@ -150,32 +182,22 @@ async function start(): Promise<void> {
             <div v-if="run.mode === 'range'" class="row" style="margin-top: 16px">
               <div class="field" style="margin-bottom: 0">
                 <label class="field-label">基准分支 (--from)</label>
-                <select v-model="run.from">
-                  <option value="">请选择…</option>
-                  <option v-for="branch in run.branches" :key="branch.name" :value="branch.name">
-                    {{ branchLabel(branch) }}
-                  </option>
-                </select>
+                <SelectMenu v-model="run.from" :options="branchOptions" label="基准分支" />
               </div>
               <div class="field" style="margin-bottom: 0">
                 <label class="field-label">目标分支 (--to)</label>
-                <select v-model="run.to">
-                  <option value="">请选择…</option>
-                  <option v-for="branch in run.branches" :key="branch.name" :value="branch.name">
-                    {{ branchLabel(branch) }}
-                  </option>
-                </select>
+                <SelectMenu v-model="run.to" :options="branchOptions" label="目标分支" />
               </div>
             </div>
   
             <div v-else-if="run.mode === 'commit'" class="field" style="margin-top: 16px; margin-bottom: 0">
               <label class="field-label">提交 (--commit)</label>
-              <select v-model="run.commit">
-                <option value="">请选择…</option>
-                <option v-for="item in run.commits" :key="item.hash" :value="item.hash">
-                  {{ item.short }} · {{ item.subject }} — {{ item.meta }}
-                </option>
-              </select>
+              <SelectMenu
+                v-model="run.commit"
+                :options="commitOptions"
+                label="提交"
+                :menu-min-width="360"
+              />
               <div class="field-hint">只显示最近 60 个提交；需要更早的提交请直接粘贴完整 hash。</div>
             </div>
   
@@ -217,12 +239,7 @@ async function start(): Promise<void> {
               <div class="row">
                 <div class="field">
                   <label class="field-label">审查力度 (--effort)</label>
-                  <select v-model="run.effort">
-                    <option value="">使用配置默认</option>
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high">high</option>
-                  </select>
+                  <SelectMenu v-model="run.effort" :options="effortOptions" label="审查力度" />
                 </div>
   
                 <div class="field">
@@ -285,12 +302,12 @@ async function start(): Promise<void> {
                   </label>
                   <label class="checkbox">
                     <span>分批策略</span>
-                    <select v-model="run.batch" style="width: auto">
-                      <option value="">默认</option>
-                      <option value="none">none</option>
-                      <option value="by-language">by-language</option>
-                      <option value="by-directory">by-directory</option>
-                    </select>
+                    <SelectMenu
+                      v-model="run.batch"
+                      :options="batchOptions"
+                      label="分批策略"
+                      class="compact"
+                    />
                   </label>
                 </template>
               </div>
