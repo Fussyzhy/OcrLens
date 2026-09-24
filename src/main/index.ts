@@ -2,6 +2,7 @@ import path from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
 import { IPC } from '@shared/types'
 import { ensureEnv } from './env'
+import { appIcon } from './icon'
 import { cancelAllRuns, registerIpc } from './ipc'
 import { destroyTray, installCloseToTray, installTray, markQuitting } from './tray'
 
@@ -16,6 +17,31 @@ import { destroyTray, installCloseToTray, installTray, markQuitting } from './tr
 
 let mainWindow: BrowserWindow | null = null
 
+/**
+ * Pins the app's own data directory, then names the app.
+ *
+ * The order matters, and getting it wrong is silent. Electron derives the
+ * `userData` path from the app name, and **`app.setName` invalidates that cached
+ * path** — so name first leaves the directory at %APPDATA%\OcrLens, and every
+ * file the README documents (%APPDATA%\ocr-client\settings.json,
+ * session-titles.json, session-trash\, config-backups\) appears to be lost the
+ * first time someone runs a packaged build. Reading the path first and pinning it
+ * back with `setPath` keeps a development run and a packaged build on the one
+ * directory, with no migration step.
+ *
+ * This is deliberately unconditional. `scripts/probe-rails.cjs` already points
+ * `userData` at a throwaway directory before this module is ever loaded, so the
+ * read below returns that directory and pinning it again is a no-op — the probe's
+ * isolation survives. (Its comment "must happen before the app's own modules ask
+ * for a path" is exactly this contract.)
+ *
+ * The cost of the rename is one orphaned %LOCALAPPDATA%\OcrLens cache directory;
+ * caches live under the app name and are not what `userData` points at.
+ */
+const userDataDir = app.getPath('userData')
+app.setPath('userData', userDataDir)
+app.setName('OcrLens')
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -29,9 +55,8 @@ function createWindow(): void {
     frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
-    // Window and taskbar icon. `resources/` sits beside the built main bundle
-    // in development; a packaged build would have to copy it in explicitly.
-    icon: path.join(__dirname, '../../resources/icon.png'),
+    // Window and taskbar icon (see appIcon in ./icon for the two locations).
+    icon: appIcon(),
     title: 'OcrLens',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

@@ -17,7 +17,7 @@
  * backups stay out of reach, while the CLI's session store is read as usual.
  *
  * Usage:
- *   yarn build
+ *   yarn compile
  *   node_modules\.bin\electron scripts\smoke.cjs
  *
  * Environment:

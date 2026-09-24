@@ -11,7 +11,7 @@
  * layout and renders, so it can be run repeatedly while iterating on CSS.
  *
  * Usage:
- *   yarn build
+ *   yarn compile
  *   node_modules\.bin\electron scripts\probe-ui.cjs
  *
  * Environment:

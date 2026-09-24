@@ -1,5 +1,5 @@
-import path from 'node:path'
 import { app, BrowserWindow, Menu, Notification, Tray, nativeImage } from 'electron'
+import { appIcon } from './icon'
 
 /**
  * The tray icon, and the rule that closing the window only puts it away.
@@ -51,9 +51,9 @@ function showWindow(getWindow: () => BrowserWindow | null, createWindow: () => v
  * than thrown: the tray still works, it just has no picture.
  */
 function trayImage(): Electron.NativeImage {
-  const image = nativeImage.createFromPath(path.join(__dirname, '../../resources/icon.png'))
+  const image = nativeImage.createFromPath(appIcon())
   if (image.isEmpty()) {
-    console.error('tray icon not found next to the main bundle')
+    console.error(`tray icon not found at ${appIcon()}`)
     return image
   }
   return image.resize({ width: 16, height: 16 })

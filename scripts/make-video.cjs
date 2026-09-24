@@ -1141,7 +1141,7 @@ async function main() {
 
   await sleep(9000)
   const win = BrowserWindow.getAllWindows()[0]
-  if (!win) throw new Error('no BrowserWindow was created — did `yarn build` run?')
+  if (!win) throw new Error('no BrowserWindow was created — did `yarn compile` run?')
 
   // A visible, focused window is required. `capturePage()` returns what has been
   // composited, and an unfocused or occluded window can hand back a stale frame:

@@ -37,8 +37,9 @@ OcrLens（代码审查镜）是 [open-code-review](https://github.com/alibaba/op
 ```bash
 yarn install         # 安装依赖（会下载 Electron 二进制）
 yarn dev             # 开发模式，带热更新
-yarn build           # 构建到 out/
-yarn start           # 预览构建产物
+yarn compile         # 只编译到 out/（不打安装包）
+yarn build           # 打包出 NSIS 安装包（见「打包」）
+yarn start           # 预览 out/ 里的构建产物
 yarn typecheck       # tsc + vue-tsc 双份类型检查
 yarn smoke           # 端到端自检（见「自检」）
 yarn probe:ui        # 界面布局自检：截图 + 实测几何
@@ -47,6 +48,53 @@ yarn probe:rails     # 主进程写入类路径自检：隔离 HOME 里真删真
 
 > 本项目的包管理器是 **yarn**，不要用 npm 装依赖：仓库里只保留 `yarn.lock`，
 > `package-lock.json` 已删除并被 `.gitignore` 忽略，避免两份锁文件互相打架。
+
+<img src="docs/readme/divider.svg" width="100%" alt="">
+
+## 打包
+
+注意 **`yarn compile` 不是打包**：它只把 TypeScript 编译进 `out/`，产物仍需要本机的
+`node_modules/electron` 才能跑，发给别人是没有用的。要出可分发的程序用下面两条：
+
+```powershell
+yarn build           # NSIS 安装包：release/OcrLens-0.1.0-setup.exe（用来分发）
+yarn build:unpack    # 免安装目录：release/win-unpacked/（快，用来验证）
+```
+
+两条都自带 `yarn compile`（只编译的那个命令叫 `compile`，因为它确实只是编译）。三套自检脚本
+（`smoke` / `probe:*`）和 `yarn video` 依赖的都是 `out/`，所以它们走的是 `compile`，不会顺手
+打一个安装包出来。
+
+配置在 `electron-builder.yml`（独立文件，不写进 `package.json`）。因为 `out/main/index.js`
+只 `require` `electron` 和 `node:*` 内置模块、`package.json` 里也没有 `dependencies`，
+所以**整个 `node_modules` 都不进包**、也不需要重建原生模块：`resources/app.asar` 只有
+约 0.7 MB，里面仅有 `out/` 和 `package.json`。装完总共约 370 MB，几乎全是 Electron 自己。
+
+两处需要注意的地方：
+
+- **图标放在 `extraResources` 而不是 `files` 里**：`resources/icon.png` 被复制到
+  `<安装目录>/resources/resources/icon.png`，即 `app.asar` **外面**；主进程通过
+  `src/main/icon.ts` 的 `appIcon()` 读它（打包时走 `process.resourcesPath`，开发时走
+  `__dirname` 往上两级）。同时 `win.icon` 让 exe 文件本身也带上图标——不然资源管理器里
+  只是个默认的 Electron 图标。
+- **`app.setName()` 必须在 `app.setPath('userData', …)` 之后调用**，见 `src/main/index.ts`
+  顶部的注释：`setName` 会让 Electron 重新计算 `userData` 路径，顺序反了的话打包版会去读
+  `%APPDATA%\OcrLens`，而设置、标题、回收站、备份都在 `%APPDATA%\ocr-client`（见下表），
+  看起来就像全丢了。现在两者指向同一个目录，**从开发态切到打包版不需要迁移任何数据**。
+
+`ocr` 和 `git` 依然**不打进包里**（同上文前置要求，它们在运行时定位）。开发机上的镜像与代理
+写在 `build` / `build:unpack` 两个脚本里（`ELECTRON_MIRROR` 指向 npmmirror、`HTTPS_PROXY`
+指到本机 7890），所以 electron-builder 拉 Electron 发行包时不依赖 shell 里有没有配代理。
+如果换机器或换端口，改这两个脚本即可。
+
+> 脚本名有两个坑，都踩过：`yarn pack` / `yarn publish` 是 **yarn 自带命令**，会覆盖
+> `package.json` 里的同名脚本（早先叫 `pack` 的版本就被劫持去打了个 npm tarball）；
+> 另外 `yarn build` 现在**会真的打包**，想只要 `out/` 请用 `yarn compile`。
+
+**打包产物不在三套自检的覆盖范围内**：`yarn smoke` / `probe:ui` / `probe:rails` 加载的都是
+`out/`，驱动 `node_modules/electron`，对安装包里的 `app.asar` 一无所知。出安装包后请手工过一遍：
+双击安装 → 从开始菜单启动 → 任务栏/托盘图标不是默认 Electron 图标 → 关窗口进托盘而不是退出 →
+托盘菜单「退出 OcrLens」能真的退出。
 
 <img src="docs/readme/divider.svg" width="100%" alt="">
 

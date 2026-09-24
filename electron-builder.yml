@@ -1,0 +1,61 @@
+# electron-builder packaging configuration.
+#
+# `yarn compile` only compiles TypeScript into `out/`; it produces no distributable.
+# The two scripts that read this file are:
+#
+#   yarn build        NSIS installer in release/             (the thing you hand out)
+#   yarn build:unpack unpacked app in release/win-unpacked/  (fast; use it to verify)
+#
+# Why the packaged app is tiny: `out/main/index.js` requires nothing but
+# `electron` and `node:*` builtins (verified against the built bundle), and this
+# manifest has no `dependencies` at all. So `node_modules` is deliberately NOT
+# packaged, and no native module needs rebuilding.
+appId: com.ocrlens.app
+productName: OcrLens
+
+directories:
+  # Already covered by .gitignore.
+  output: release
+  # Left at its default (build/) rather than pointed elsewhere: this only controls
+  # where electron-builder looks for installer assets such as an icon.ico or
+  # installer.nsh, and we do not use any. Note that build/ also holds the promo
+  # stage (build/stage/), which this setting does not touch.
+  buildResources: build
+
+# What goes into app.asar. Keep this list tight: `out/` is all the code there is.
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+
+# Copied to the app's resources directory, i.e. beside app.asar. NOT inside the
+# asar: src/main/index.ts and src/main/tray.ts resolve the icon through
+# ../resources/icon.png and therefore expect <resources>/resources/icon.png.
+extraResources:
+  - from: resources/icon.png
+    to: resources/icon.png
+
+# There is no native module to rebuild, and skipping the rebuild avoids pulling
+# in a toolchain.
+npmRebuild: false
+
+win:
+  # electron-builder converts this PNG to the multi-size .ico the executable and
+  # the installer need. It must be at least 256x256; the file is 1254x1254.
+  icon: resources/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  # A wizard, not a silent one-click installer: there are real choices to make
+  # (install location, shortcuts).
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OcrLens
+  # `productName` has no space in it, so this needs no quoting.
+  artifactName: ${productName}-${version}-setup.${ext}

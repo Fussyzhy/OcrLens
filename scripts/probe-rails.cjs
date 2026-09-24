@@ -13,7 +13,7 @@
  * reports what landed where.
  *
  * Usage:
- *   yarn build
+ *   yarn compile
  *   node_modules\.bin\electron scripts\probe-rails.cjs
  *
  * Environment:
